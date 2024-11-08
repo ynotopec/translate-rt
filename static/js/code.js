@@ -12,9 +12,9 @@ let silenceThreshold = 0.01; // Adjust this threshold based on your environment
 let silenceDuration = 1000; // 1 second
 let silenceStart = 0;
 let recordingStartTime = 0;
-let minChunkDuration = 8000; // 8 seconds
+let minChunkDuration = 3500; // 8 seconds
 let maxChunkDuration = 10000; // 10 seconds
-let shouldRestartRecording = false;
+let shouldRestartRecording = false; //true; //false;
 
 recordButton.addEventListener('click', async () => {
     try {
@@ -84,18 +84,21 @@ async function sendAudioToServer(audioBlob) {
 }
 
 function displayTranscriptionResult(result) {
-    let text = result.text || ''; // Adjust this line based on the actual structure of your result
-    text = text.replace(/[{}]/g, ''); // Remove curly braces
+    const cleanedText = (result.text || '')
+        .replace(/[{}]/g, '')  // Remove braces
+        .split('\n')
+        .filter(line => line.trim() !== '')  // Remove empty lines
+        .join('\n');
 
-    const sentences = text.match(/[^.!?]*[.!?]/g);
+    if (!cleanedText.trim()) return; // If the cleaned text is empty, do nothing
 
-    if (sentences) {
-        sentences.forEach(sentence => {
-            transcriptionResult.textContent += sentence.trim() + '\n';
-        });
-    } else {
-        transcriptionResult.textContent += text.trim();
-    }
+    // Match sentences ending with punctuation marks or ellipses
+    const sentences = cleanedText.match(/[^.!?]*?(?:\.{3}|[.!?])/g) || [cleanedText.trim()];
+
+    // Rebuild the text by trimming each sentence and joining them with new lines
+    const formattedText = sentences.map(sentence => sentence.trim()).join('\n');
+
+    transcriptionResult.textContent += '\n' + formattedText; // + '\n';
 }
 
 function monitorSilence() {
