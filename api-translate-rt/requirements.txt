@@ -1,0 +1,11 @@
+#diart
+#whisper_timestamped
+#SpeechRecognition
+#pydub
+#nltk
+#pyaudio
+flask
+flask-cors
+requests
+opuslib
+numpy
