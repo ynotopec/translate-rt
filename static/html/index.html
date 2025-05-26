@@ -1,17 +1,358 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="fr" data-fr-scheme="system">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Traduction temps réel</title>
+    <title>Traduction temps réel - République française</title>
+    
+    <!-- DSFR CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/@gouvfr/dsfr@1.11.2/dist/dsfr.min.css" rel="stylesheet">
+    
+    <!-- Favicon officiel -->
+    <link rel="apple-touch-icon" href="https://cdn.jsdelivr.net/npm/@gouvfr/dsfr@1.11.2/dist/favicon/apple-touch-icon.png">
+    <link rel="icon" href="https://cdn.jsdelivr.net/npm/@gouvfr/dsfr@1.11.2/dist/favicon/favicon.svg" type="image/svg+xml">
+    <link rel="shortcut icon" href="https://cdn.jsdelivr.net/npm/@gouvfr/dsfr@1.11.2/dist/favicon/favicon.ico" type="image/x-icon">
+    
+    <style>
+        /* Styles personnalisés complémentaires au DSFR */
+        .fr-container--custom {
+            max-width: 1000px;
+        }
+        
+        .recording-indicator {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        
+        .recording-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background-color: var(--grey-425-625);
+            transition: background-color 0.3s ease;
+        }
+        
+        .recording-dot.active {
+            background-color: var(--error-425-625);
+            animation: pulse-recording 1.5s infinite;
+        }
+        
+        @keyframes pulse-recording {
+            0%, 100% { 
+                opacity: 1; 
+                transform: scale(1);
+            }
+            50% { 
+                opacity: 0.6; 
+                transform: scale(1.2);
+            }
+        }
+        
+        .translation-output {
+            min-height: 120px;
+            background-color: var(--grey-1000-50);
+            border: 1px solid var(--grey-925-125);
+            border-radius: 0.25rem;
+            padding: 1rem;
+            font-family: "Marianne", arial, sans-serif;
+            line-height: 1.5;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+        
+        .translation-output:empty::before {
+            content: "La traduction apparaîtra ici une fois l'enregistrement démarré...";
+            color: var(--grey-625-425);
+            font-style: italic;
+        }
+        
+        .beta-tag {
+            background-color: var(--warning-950-100);
+            color: var(--warning-425-625);
+            border: 1px solid var(--warning-925-125);
+        }
+        
+        .firefox-notice {
+            background-color: var(--info-950-100);
+            border-left: 4px solid var(--info-425-625);
+        }
+        
+        .control-buttons {
+            display: flex;
+            gap: 1rem;
+            flex-wrap: wrap;
+        }
+        
+        @media (max-width: 768px) {
+            .control-buttons {
+                flex-direction: column;
+            }
+            
+            .control-buttons .fr-btn {
+                width: 100%;
+                justify-content: center;
+            }
+        }
+        
+        /* Animation d'entrée respectant les préférences d'accessibilité */
+        @media (prefers-reduced-motion: no-preference) {
+            .fade-in {
+                animation: fadeIn 0.6s ease-out;
+            }
+            
+            @keyframes fadeIn {
+                from {
+                    opacity: 0;
+                    transform: translateY(1rem);
+                }
+                to {
+                    opacity: 1;
+                    transform: translateY(0);
+                }
+            }
+        }
+        .tts-current {
+             background-color: #e0f7fa;
+             font-weight: bold;
+             transition: background-color 0.3s ease;
+        }
+    </style>
 </head>
 <body>
-    <h1>Traduction temps réel (beta, Firefox seulement !)</h1>
-    <button id="recordButton">Débuter</button>
-    <button id="stopButton" disabled>Arrêter</button>
-    <h2>Traduction:</h2>
-    <pre id="transcriptionResult"></pre>
+    <!-- En-tête officiel -->
+    <header class="fr-header">
+        <div class="fr-header__body">
+            <div class="fr-container">
+                <div class="fr-header__body-row">
+                    <div class="fr-header__brand fr-enlarge-link">
+                        <div class="fr-header__brand-top">
+                            <div class="fr-header__logo">
+                                <p class="fr-logo">
+                                    République
+                                    <br>française
+                                </p>
+                            </div>
+                        </div>
+                        <div class="fr-header__service">
+                            <a href="/" title="Accueil - Traduction temps réel">
+                                <p class="fr-header__service-title">
+                                    Traduction temps réel
+                                    <span class="fr-badge fr-badge--sm beta-tag fr-ml-1w">BETA</span>
+                                </p>
+                            </a>
+                            <p class="fr-header__service-tagline">Service numérique de l'État</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </header>
 
+    <!-- Contenu principal -->
+    <main class="fr-container fr-container--custom fr-my-6w fade-in" id="main-content">
+        
+        <!-- Alerte Firefox -->
+        <div class="fr-alert fr-alert--info firefox-notice fr-mb-4w">
+            <h3 class="fr-alert__title">Information importante</h3>
+            <p>Ce service est actuellement compatible uniquement avec le navigateur Mozilla Firefox. Assurez-vous d'utiliser Firefox pour une expérience optimale.</p>
+        </div>
+
+        <!-- Titre principal -->
+        <div class="fr-mb-6w">
+            <h1 class="fr-h1 fr-mb-2w">
+                <span class="fr-icon-mic-line fr-icon--lg fr-mr-2w" aria-hidden="true"></span>
+                Traduction vocale en temps réel
+            </h1>
+            <p class="fr-text--lead fr-mb-0">
+                Traduisez instantanément vos paroles dans la langue de votre choix grâce à l'intelligence artificielle.
+            </p>
+        </div>
+
+        <!-- Formulaire de configuration -->
+        <div class="fr-grid-row fr-grid-row--gutters">
+            <div class="fr-col-12 fr-col-md-6">
+                <div class="fr-select-group">
+                    <label class="fr-label" for="langSelect">
+                        <span class="fr-icon-global-line fr-icon--sm fr-mr-1w" aria-hidden="true"></span>
+                        Langue de destination
+                        <span class="fr-hint-text">Sélectionnez la langue vers laquelle traduire</span>
+                    </label>
+                    <select class="fr-select" id="langSelect" name="langSelect">
+                        <option value="en">🇺🇸 Anglais (États-Unis)</option>
+                        <option value="fr" selected>🇫🇷 Français</option>
+                        <option value="es">🇪🇸 Espagnol</option>
+                        <option value="it">🇮🇹 Italien</option>
+                        <option value="pt">🇧🇷 Portugais (Brésil)</option>
+                        <option value="hi">🇮🇳 Hindi</option>
+                        <option value="ja">🇯🇵 Japonais</option>
+                        <option value="zh-cn">🇨🇳 Chinois simplifié</option>
+                        <option value="en-gb">🇬🇧 Anglais (Royaume-Uni)</option>
+                    </select>
+                </div>
+            </div>
+        </div>
+
+        <!-- Contrôles d'enregistrement -->
+        <div class="fr-mt-4w fr-mb-6w">
+            <fieldset class="fr-fieldset">
+                <legend class="fr-fieldset__legend fr-text--regular">
+                    <span class="fr-icon-settings-5-line fr-icon--sm fr-mr-1w" aria-hidden="true"></span>
+                    Contrôles d'enregistrement
+                </legend>
+                <div class="fr-fieldset__content">
+                    <div class="control-buttons">
+                        <button class="fr-btn fr-btn--lg fr-icon-play-line fr-btn--icon-left" 
+                                id="recordButton" 
+                                type="button">
+                            Commencer l'enregistrement
+                        </button>
+                        <button class="fr-btn fr-btn--lg fr-btn--secondary fr-icon-stop-line fr-btn--icon-left" 
+                                id="stopButton" 
+                                type="button" 
+                                disabled>
+                            Arrêter l'enregistrement
+                        </button>
+                    </div>
+                </div>
+            </fieldset>
+        </div>
+
+        <!-- Zone de résultats -->
+        <div class="fr-mb-6w">
+            <h2 class="fr-h3 fr-mb-2w">
+                <span class="recording-indicator">
+                    <span class="fr-icon-chat-3-line fr-icon--sm fr-mr-1w" aria-hidden="true"></span>
+                    Résultat de la traduction
+                    <span class="recording-dot" id="recordingIndicator" aria-hidden="true"></span>
+                </span>
+            </h2>
+            <div class="translation-output" 
+                 id="transcriptionResult" 
+                 role="log" 
+                 aria-live="polite" 
+                 aria-label="Zone d'affichage de la traduction">
+            </div>
+        </div>
+
+        <!-- Informations complémentaires -->
+        <div class="fr-accordion">
+            <h3 class="fr-accordion__title">
+                <button class="fr-accordion__btn" aria-expanded="false" aria-controls="accordion-help">
+                    <span class="fr-icon-question-line fr-icon--sm fr-mr-1w" aria-hidden="true"></span>
+                    Comment utiliser ce service ?
+                </button>
+            </h3>
+            <div class="fr-collapse" id="accordion-help">
+                <div class="fr-accordion__body">
+                    <div class="fr-accordion__inner">
+                        <ol class="fr-ol">
+                            <li>Sélectionnez la langue de destination dans le menu déroulant</li>
+                            <li>Cliquez sur "Commencer l'enregistrement" et autorisez l'accès au microphone</li>
+                            <li>Parlez clairement dans votre microphone</li>
+                            <li>La traduction apparaîtra automatiquement dans la zone de résultat</li>
+                            <li>Cliquez sur "Arrêter l'enregistrement" pour terminer</li>
+                        </ol>
+                        <div class="fr-alert fr-alert--warning fr-mt-3w">
+                            <p class="fr-alert__title">Attention</p>
+                            <p>Ce service est en version bêta. La qualité de la traduction peut varier selon la clarté de l'audio et la complexité du contenu.</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+    </main>
+
+    <!-- Pied de page -->
+    <footer class="fr-footer" role="contentinfo" id="footer">
+        <div class="fr-container">
+            <div class="fr-footer__body">
+                <div class="fr-footer__brand fr-enlarge-link">
+                    <p class="fr-logo">
+                        République
+                        <br>française
+                    </p>
+                </div>
+                <div class="fr-footer__content">
+                    <p class="fr-footer__content-desc">
+                        Service numérique développé dans le cadre de la transformation digitale de l'État français.
+                    </p>
+                    <ul class="fr-footer__content-list">
+                        <li class="fr-footer__content-item">
+                            <a class="fr-footer__content-link" href="#" target="_blank" rel="noopener noreferrer">
+                                Accessibilité : non conforme
+                            </a>
+                        </li>
+                        <li class="fr-footer__content-item">
+                            <a class="fr-footer__content-link" href="#" target="_blank" rel="noopener noreferrer">
+                                Mentions légales
+                            </a>
+                        </li>
+                        <li class="fr-footer__content-item">
+                            <a class="fr-footer__content-link" href="#" target="_blank" rel="noopener noreferrer">
+                                Données personnelles
+                            </a>
+                        </li>
+                    </ul>
+                </div>
+            </div>
+            <div class="fr-footer__bottom">
+                <ul class="fr-footer__bottom-list">
+                    <li class="fr-footer__bottom-item">
+                        <span class="fr-footer__bottom-link">© République française 2025</span>
+                    </li>
+                </ul>
+            </div>
+        </div>
+    </footer>
+
+    <!-- Scripts DSFR -->
+    <script src="https://cdn.jsdelivr.net/npm/@gouvfr/dsfr@1.11.2/dist/dsfr.module.min.js" type="module"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@gouvfr/dsfr@1.11.2/dist/dsfr.nomodule.min.js" type="text/javascript" nomodule></script>
+    
+    <!-- Votre script existant (DOIT être chargé en premier) -->
     <script src="/static/js/code.js"></script>
+    
+    <!-- Script pour l'indicateur visuel uniquement -->
+    <script>
+        // Attendre que le DOM et votre script soient chargés
+        document.addEventListener('DOMContentLoaded', function() {
+            const recordButton = document.getElementById('recordButton');
+            const stopButton = document.getElementById('stopButton');
+            const recordingIndicator = document.getElementById('recordingIndicator');
+            
+            // Observer les changements d'état des boutons pour mettre à jour l'indicateur
+            const observer = new MutationObserver(function(mutations) {
+                mutations.forEach(function(mutation) {
+                    if (mutation.type === 'attributes' && mutation.attributeName === 'disabled') {
+                        updateRecordingIndicator();
+                    }
+                });
+            });
+            
+            // Observer les changements sur les boutons
+            observer.observe(recordButton, { attributes: true });
+            observer.observe(stopButton, { attributes: true });
+            
+            // Fonction pour mettre à jour l'indicateur visuel
+            function updateRecordingIndicator() {
+                if (recordButton.disabled && !stopButton.disabled) {
+                    // Enregistrement en cours
+                    recordingIndicator.classList.add('active');
+                    recordButton.innerHTML = '<span class="fr-icon-loader-3-line fr-icon--sm fr-mr-1w" aria-hidden="true"></span>Enregistrement en cours...';
+                } else {
+                    // Enregistrement arrêté
+                    recordingIndicator.classList.remove('active');
+                    recordButton.innerHTML = '<span class="fr-icon-play-line fr-icon--sm fr-mr-1w" aria-hidden="true"></span>Commencer l\'enregistrement';
+                }
+            }
+            
+            // Mise à jour initiale
+            updateRecordingIndicator();
+            
+            console.log('Interface DSFR initialisée - Compatibilité avec le script existant assurée');
+        });
+    </script>
 </body>
 </html>
