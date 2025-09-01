@@ -1,0 +1,143 @@
+openapi: 3.1.0
+info:
+  title: api-translate-rt
+  version: "1.0"
+servers:
+  - url: https://api-translate-rt.cloud-pi-native.com
+paths:
+  /upload:
+    post:
+      summary: Upload d'un chunk audio pour ASR + traduction + diarisation
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file, target_lang, primary_lang]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: Audio (webm/ogg opus)
+                target_lang:
+                  type: string
+                  example: fr
+                primary_lang:
+                  type: string
+                  example: fr
+      responses:
+        "200":
+          description: Résultat transcription + traduction
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UploadResponse'
+              examples:
+                ok:
+                  value:
+                    diarization: { identifier: "spk_9f2a", noise: false }
+                    transcription: "Hello"
+                    translation_fr: "Bonjour"
+        "400":
+          description: Requête invalide
+        "500":
+          description: Erreur serveur
+  /tts-proxy:
+    post:
+      summary: Synthèse vocale d’un texte (TTS)
+      security:
+        - bearerAuth: []   # Actif si le proxy exige un token
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TTSRequest'
+            examples:
+              ex:
+                value:
+                  model: gpt-4o-mini-tts
+                  input: "Bonjour, comment puis-je vous aider ?"
+                  voice: alloy
+                  instructions: "Speak in a cheerful and positive tone."
+                  response_format: opus
+      responses:
+        "200":
+          description: Flux audio TTS
+          content:
+            audio/ogg:
+              schema:
+                type: string
+                format: binary
+            audio/webm:
+              schema:
+                type: string
+                format: binary
+            audio/opus:
+              schema:
+                type: string
+                format: binary
+        "401":
+          description: Non autorisé (si token requis)
+        "400":
+          description: Requête invalide
+        "500":
+          description: Erreur serveur
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  schemas:
+    Diarization:
+      type: object
+      required: [identifier, noise]
+      properties:
+        identifier:
+          type: string
+          description: Identifiant locuteur; le front utilise les 4 derniers chars
+          example: spk_9f2a
+        noise:
+          type: boolean
+          description: True = bruit, ignorer le résultat côté front
+          example: false
+    UploadResponse:
+      type: object
+      required: [diarization, transcription]
+      properties:
+        diarization:
+          $ref: '#/components/schemas/Diarization'
+        transcription:
+          type: string
+          example: "Hello"
+        # Le front recherche d'abord translation_{primary_lang}, puis translation_{target_lang}
+        translation_fr:
+          type: string
+          example: "Bonjour"
+        translation_en:
+          type: string
+          example: "Hello"
+    TTSRequest:
+      type: object
+      required: [model, input, voice, response_format]
+      properties:
+        model:
+          type: string
+          example: gpt-4o-mini-tts
+        input:
+          type: string
+          description: Texte à synthétiser
+          example: "Bonjour à tous"
+        voice:
+          type: string
+          example: alloy
+        instructions:
+          type: string
+          description: Style/Ton souhaité
+          example: "Speak in a cheerful and positive tone."
+        response_format:
+          type: string
+          enum: [opus, ogg, webm]
+          example: opus
