@@ -86,6 +86,50 @@ def call_whisper(file) -> Dict[str, Any]:
     files = {'file': (file.filename, file.stream, 'audio/webm'), 'model': (None, 'whisper-1')}
     return post(Cfg.WHISPER_URL, headers={'Authorization': f'Bearer {Cfg.AUDIO_API_KEY}'}, files=files).json()
 
+
+def _looks_like_noise(text: str, whisper_payload: Dict[str, Any]) -> bool:
+    """Heuristic to detect transcripts produced from silence or background noise."""
+
+    def _is_short_phrase(value: str) -> bool:
+        words = value.split()
+        return len(value) <= 3 or (len(value) <= 7 and len(words) <= 2)
+
+    cleaned = re.sub(r"\s+", " ", text or "").strip()
+    if not cleaned:
+        return True
+
+    # Punctuation-only snippets ("." or "…") are almost always silence artefacts.
+    if not any(ch.isalnum() for ch in cleaned):
+        return True
+
+    payload = whisper_payload or {}
+    segments = payload.get('segments') or []
+
+    no_speech_scores = [
+        seg.get('no_speech_prob')
+        for seg in segments
+        if isinstance(seg.get('no_speech_prob'), (int, float))
+    ]
+    top_no_speech = payload.get('no_speech_prob')
+    if isinstance(top_no_speech, (int, float)):
+        no_speech_scores.append(top_no_speech)
+
+    avg_logprobs = [
+        seg.get('avg_logprob')
+        for seg in segments
+        if isinstance(seg.get('avg_logprob'), (int, float))
+    ]
+
+    if no_speech_scores and max(no_speech_scores) >= 0.85 and _is_short_phrase(cleaned):
+        return True
+
+    if avg_logprobs:
+        avg_lp = sum(avg_logprobs) / len(avg_logprobs)
+        if avg_lp <= -1.25 and _is_short_phrase(cleaned):
+            return True
+
+    return False
+
 def call_diarization(file, target_lang: str) -> Dict[str, Any]:
     if not Cfg.DIAR_TOKEN: return {}
     file.stream.seek(0)
@@ -201,9 +245,20 @@ def upload():
     target = request.form.get('target_lang','fr'); primary = request.form.get('primary_lang','fr')
     diar = call_diarization(f, target)
     f.stream.seek(0)
-    try: w = call_whisper(f); text = (w or {}).get('text','').strip()
-    except Exception as e: log(f'[WHISPER ERROR] {e}'); text=''
-    if not text or text.lower() in FILTER: return jsonify({'text':'','diarization':diar})
+    whisper_payload = {}
+    try:
+        whisper_payload = call_whisper(f) or {}
+        text = whisper_payload.get('text', '').strip()
+    except Exception as e:
+        log(f'[WHISPER ERROR] {e}')
+        text = ''
+
+    if text and _looks_like_noise(text, whisper_payload):
+        log(f"[WHISPER] filtered probable noise transcript: {text!r}")
+        text = ''
+
+    if not text or text.lower() in FILTER:
+        return jsonify({'text': '', 'diarization': diar})
     try: from langdetect import detect; detected = detect(text)
     except Exception: detected = ''
     res = {'detected_lang': detected, 'transcription': text, 'diarization': diar}
