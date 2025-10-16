@@ -77,6 +77,8 @@
     minVoiceMs: 400,
     minSpeechRms: 0.012,
     minSpeechFrames: 6,
+    punctuationCheckMs: 3000,
+    punctuationSilenceMs: 300,
     TTS_FLUSH_MS: 10000,
   };
 
@@ -288,9 +290,27 @@
         State.silenceStart = t;
       }
 
+      const chunkLongEnough = t - State.recordingStart > Limits.minChunkDuration;
+
+      // Courte pause après 3 s → coupe anticipée (ponctuation probable)
+      if (!State.isSpeech && State.hadSpeechSinceResume && State.silenceStart && chunkLongEnough) {
+        const silenceDuration = t - State.silenceStart;
+        if (silenceDuration >= Limits.punctuationSilenceMs &&
+            t - State.recordingStart >= Limits.punctuationCheckMs) {
+          State.lastChunkHadSpeech = VAD._shouldSendChunk();
+          State.shouldRestartRecording = true;
+          VAD.stop();
+          try { State.mediaRecorder.stop(); } catch {}
+          VAD.resetSpeechTracking();
+          State.silenceStart = 0;
+          State.speechStartTime = 0;
+          return;
+        }
+      }
+
       // Silence prolongé → coupe si le chunk contient de la parole
       if (!State.isSpeech && State.hadSpeechSinceResume && State.silenceStart &&
-          t - State.silenceStart > Limits.minSilenceMs && t - State.recordingStart > Limits.minChunkDuration) {
+          t - State.silenceStart > Limits.minSilenceMs && chunkLongEnough) {
         State.lastChunkHadSpeech = VAD._shouldSendChunk();
         State.shouldRestartRecording = true;
         VAD.stop();
