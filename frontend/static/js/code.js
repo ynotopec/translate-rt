@@ -83,7 +83,9 @@
   const VADParams = {
     alphaLevel: 0.85,
     alphaNoise: 0.995,
-    speechMargin: 3.0,
+    speechStartMargin: 3.0,
+    speechStopMargin: 2.2,
+    silenceHoldMs: 120,
     initNoiseFloor: 0.002,
     intervalMs: 50,
   };
@@ -108,8 +110,9 @@
     // VAD
     levelEMA: 0,
     noiseFloor: VADParams.initNoiseFloor,
-    lastAboveTime: 0,
-    lastBelowTime: 0,
+    speechStartTime: 0,
+    silenceStart: 0,
+    isSpeech: false,
     vadTimer: null,
 
     // Diarisation / affichage
@@ -203,7 +206,8 @@
     },
 
     restart() {
-      State.lastBelowTime = 0; State.lastAboveTime = 0;
+      State.silenceStart = 0; State.speechStartTime = 0;
+      State.isSpeech = false;
       State.shouldRestartRecording = false;
       State.hadSpeechSinceResume = false;
       State.lastChunkHadSpeech = false;
@@ -230,6 +234,9 @@
       State.hadSpeechSinceResume = false;
       State.maxRmsSinceResume = 0;
       State.totalSpeechFrames = 0;
+      State.isSpeech = false;
+      State.speechStartTime = 0;
+      State.silenceStart = 0;
     },
     _shouldSendChunk() {
       if (!State.hadSpeechSinceResume) return false;
@@ -242,40 +249,55 @@
 
       State.analyser.getFloatTimeDomainData(State.dataArray);
       let peak = 0;
-      const rms = Math.sqrt(State.dataArray.reduce((s, v) => {
-        const abs = Math.abs(v);
+      let sumSquares = 0;
+      for (let i = 0; i < State.dataArray.length; i++) {
+        const sample = State.dataArray[i];
+        const abs = Math.abs(sample);
         if (abs > peak) peak = abs;
-        return s + v * v;
-      }, 0) / State.dataArray.length);
+        sumSquares += sample * sample;
+      }
+      const rms = Math.sqrt(sumSquares / State.dataArray.length);
 
-      // EMA rapides/lentes
+      // EMA rapides/lentes avec hystérésis pour limiter les faux positifs
       State.levelEMA = VADParams.alphaLevel * State.levelEMA + (1 - VADParams.alphaLevel) * rms;
-      const isBelow = State.levelEMA <= State.noiseFloor * VADParams.speechMargin;
-      if (isBelow) State.noiseFloor = VADParams.alphaNoise * State.noiseFloor + (1 - VADParams.alphaNoise) * State.levelEMA;
-
+      const speechStartThreshold = State.noiseFloor * VADParams.speechStartMargin;
+      const speechStopThreshold = State.noiseFloor * VADParams.speechStopMargin;
       const t = now();
-      if (State.levelEMA > State.noiseFloor * VADParams.speechMargin) {
-        if (!State.lastAboveTime) State.lastAboveTime = t;
-        State.lastBelowTime = 0;
+
+      if (State.levelEMA >= speechStartThreshold) {
+        if (!State.isSpeech) {
+          State.isSpeech = true;
+          State.speechStartTime = t;
+        }
+        State.silenceStart = 0;
         State.maxRmsSinceResume = Math.max(State.maxRmsSinceResume, peak || rms);
         State.totalSpeechFrames++;
-        if (t - State.lastAboveTime > Limits.minVoiceMs) State.hadSpeechSinceResume = true;
-      } else {
-        if (!State.lastBelowTime) State.lastBelowTime = t;
-        State.lastAboveTime = 0;
-
-        // Silence prolongé → coupe si le chunk contient de la parole
-        if (t - State.lastBelowTime > Limits.minSilenceMs && t - State.recordingStart > Limits.minChunkDuration) {
-          if (State.hadSpeechSinceResume) {
-            State.lastChunkHadSpeech = VAD._shouldSendChunk();
-            State.shouldRestartRecording = true;
-            VAD.stop();
-            try { State.mediaRecorder.stop(); } catch {}
-            VAD.resetSpeechTracking();
-            State.lastBelowTime = 0;
-            return;
-          }
+        if (!State.hadSpeechSinceResume && t - State.speechStartTime > Limits.minVoiceMs) {
+          State.hadSpeechSinceResume = true;
         }
+      } else if (State.levelEMA <= speechStopThreshold) {
+        if (!State.silenceStart) State.silenceStart = t;
+        if (State.isSpeech && t - State.silenceStart >= VADParams.silenceHoldMs) {
+          State.isSpeech = false;
+          State.speechStartTime = 0;
+        }
+        if (!State.isSpeech) {
+          State.noiseFloor = VADParams.alphaNoise * State.noiseFloor + (1 - VADParams.alphaNoise) * State.levelEMA;
+        }
+      } else if (!State.isSpeech && !State.silenceStart) {
+        State.silenceStart = t;
+      }
+
+      // Silence prolongé → coupe si le chunk contient de la parole
+      if (!State.isSpeech && State.hadSpeechSinceResume && State.silenceStart &&
+          t - State.silenceStart > Limits.minSilenceMs && t - State.recordingStart > Limits.minChunkDuration) {
+        State.lastChunkHadSpeech = VAD._shouldSendChunk();
+        State.shouldRestartRecording = true;
+        VAD.stop();
+        try { State.mediaRecorder.stop(); } catch {}
+        VAD.resetSpeechTracking();
+        State.silenceStart = 0;
+        return;
       }
 
       // Coupe dure si chunk trop long — mais n'envoie que si parole
@@ -285,7 +307,7 @@
         VAD.stop();
         try { State.mediaRecorder.stop(); } catch {}
         VAD.resetSpeechTracking();
-        State.lastBelowTime = 0; State.lastAboveTime = 0;
+        State.silenceStart = 0; State.speechStartTime = 0; State.isSpeech = false;
       }
     }
   };
