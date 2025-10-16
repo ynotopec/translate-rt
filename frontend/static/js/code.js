@@ -164,6 +164,7 @@
       State.audioChunks = [];
       State.shouldRestartRecording = false;
       State.hadSpeechSinceResume = false;
+      State.lastChunkHadSpeech = false;
 
       State.mediaRecorder.ondataavailable = (e) => { if (e.data && e.data.size) State.audioChunks.push(e.data); };
 
@@ -199,6 +200,7 @@
       State.lastBelowTime = 0; State.lastAboveTime = 0;
       State.shouldRestartRecording = false;
       State.hadSpeechSinceResume = false;
+      State.lastChunkHadSpeech = false;
       if (State.mediaRecorder?.state === 'paused') State.mediaRecorder.resume();
       else if (State.mediaRecorder?.state === 'inactive') State.mediaRecorder.start();
       State.recordingStart = now();
