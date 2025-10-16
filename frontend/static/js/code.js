@@ -75,6 +75,8 @@
     maxChunkDuration: 6500,
     minSilenceMs: 1000,
     minVoiceMs: 400,
+    minSpeechRms: 0.012,
+    minSpeechFrames: 6,
     TTS_FLUSH_MS: 10000,
   };
 
@@ -100,6 +102,8 @@
     shouldRestartRecording: false,
     hadSpeechSinceResume: false,
     lastChunkHadSpeech: false,
+    maxRmsSinceResume: 0,
+    totalSpeechFrames: 0,
 
     // VAD
     levelEMA: 0,
@@ -165,6 +169,7 @@
       State.shouldRestartRecording = false;
       State.hadSpeechSinceResume = false;
       State.lastChunkHadSpeech = false;
+      VAD.resetSpeechTracking();
 
       State.mediaRecorder.ondataavailable = (e) => { if (e.data && e.data.size) State.audioChunks.push(e.data); };
 
@@ -186,6 +191,7 @@
 
     stop() {
       VAD.stop();
+      VAD.resetSpeechTracking();
       try { if (State.mediaRecorder?.state !== 'inactive') State.mediaRecorder.stop(); } catch {}
       if (State.audioContext) try { State.audioContext.close(); } catch {}
       if (State.stream) State.stream.getTracks().forEach(t => t.stop());
@@ -201,6 +207,7 @@
       State.shouldRestartRecording = false;
       State.hadSpeechSinceResume = false;
       State.lastChunkHadSpeech = false;
+      VAD.resetSpeechTracking();
       if (State.mediaRecorder?.state === 'paused') State.mediaRecorder.resume();
       else if (State.mediaRecorder?.state === 'inactive') State.mediaRecorder.start();
       State.recordingStart = now();
@@ -219,11 +226,27 @@
     stop() {
       if (State.vadTimer) { clearInterval(State.vadTimer); State.vadTimer = null; }
     },
+    resetSpeechTracking() {
+      State.hadSpeechSinceResume = false;
+      State.maxRmsSinceResume = 0;
+      State.totalSpeechFrames = 0;
+    },
+    _shouldSendChunk() {
+      if (!State.hadSpeechSinceResume) return false;
+      if (State.maxRmsSinceResume < Limits.minSpeechRms) return false;
+      if (State.totalSpeechFrames < Limits.minSpeechFrames) return false;
+      return true;
+    },
     _tick() {
       if (!State.mediaRecorder || State.mediaRecorder.state !== 'recording') return;
 
       State.analyser.getFloatTimeDomainData(State.dataArray);
-      const rms = Math.sqrt(State.dataArray.reduce((s, v) => s + v*v, 0) / State.dataArray.length);
+      let peak = 0;
+      const rms = Math.sqrt(State.dataArray.reduce((s, v) => {
+        const abs = Math.abs(v);
+        if (abs > peak) peak = abs;
+        return s + v * v;
+      }, 0) / State.dataArray.length);
 
       // EMA rapides/lentes
       State.levelEMA = VADParams.alphaLevel * State.levelEMA + (1 - VADParams.alphaLevel) * rms;
@@ -234,6 +257,8 @@
       if (State.levelEMA > State.noiseFloor * VADParams.speechMargin) {
         if (!State.lastAboveTime) State.lastAboveTime = t;
         State.lastBelowTime = 0;
+        State.maxRmsSinceResume = Math.max(State.maxRmsSinceResume, peak || rms);
+        State.totalSpeechFrames++;
         if (t - State.lastAboveTime > Limits.minVoiceMs) State.hadSpeechSinceResume = true;
       } else {
         if (!State.lastBelowTime) State.lastBelowTime = t;
@@ -242,11 +267,11 @@
         // Silence prolongé → coupe si le chunk contient de la parole
         if (t - State.lastBelowTime > Limits.minSilenceMs && t - State.recordingStart > Limits.minChunkDuration) {
           if (State.hadSpeechSinceResume) {
-            State.lastChunkHadSpeech = true;
+            State.lastChunkHadSpeech = VAD._shouldSendChunk();
             State.shouldRestartRecording = true;
             VAD.stop();
             try { State.mediaRecorder.stop(); } catch {}
-            State.hadSpeechSinceResume = false;
+            VAD.resetSpeechTracking();
             State.lastBelowTime = 0;
             return;
           }
@@ -255,10 +280,11 @@
 
       // Coupe dure si chunk trop long — mais n'envoie que si parole
       if (t - State.recordingStart >= Limits.maxChunkDuration) {
-        State.lastChunkHadSpeech = State.hadSpeechSinceResume;
+        State.lastChunkHadSpeech = VAD._shouldSendChunk();
         State.shouldRestartRecording = true;
         VAD.stop();
         try { State.mediaRecorder.stop(); } catch {}
+        VAD.resetSpeechTracking();
         State.lastBelowTime = 0; State.lastAboveTime = 0;
       }
     }
