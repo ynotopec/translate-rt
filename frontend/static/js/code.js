@@ -1,4 +1,3 @@
-cat /home/ailab/translate-rt/static/js/code.js
 // /static/js/code.js — refactor/factorisé
 
 (() => {
@@ -68,10 +67,14 @@ cat /home/ailab/translate-rt/static/js/code.js
   const Limits = {
     MAX_MESSAGES: 65536,
     MAX_BUFFER_LENGTH: 4,
+//    minChunkDuration: 1500,
+//    maxChunkDuration: 6500,
+//    minSilenceMs: 500,
+//    minVoiceMs: 200,
     minChunkDuration: 1500,
     maxChunkDuration: 6500,
-    minSilenceMs: 500,
-    minVoiceMs: 200,
+    minSilenceMs: 1000,
+    minVoiceMs: 400,
     TTS_FLUSH_MS: 10000,
   };
 
