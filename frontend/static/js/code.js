@@ -1,42 +1,48 @@
-// /static/js/code.js — refactor/factorisé
-
+// /static/js/code.js — complet & robuste : VAD (vad.MicVAD), RecordRTC|MediaRecorder shim, TTS queue, langue cible persistée
 (() => {
   // =========================
   // Utils
   // =========================
-  const $ = (q) => document.querySelector(q);
+  const $  = (q) => document.querySelector(q);
   const $$ = (q) => document.querySelectorAll(q);
   const now = () => Date.now();
+  const log = (...a) => console.log('[translate-rt]', ...a);
 
-  const getSupportedMimeType = () => {
-    const candidates = ['audio/webm;codecs=opus', 'audio/ogg;codecs=opus'];
-    return candidates.find(t => MediaRecorder.isTypeSupported(t)) || '';
+  const safeHTML = (html) =>
+    (typeof DOMPurify !== 'undefined')
+      ? DOMPurify.sanitize(html, { ALLOWED_TAGS: ['span','strong','em','b','i'] })
+      : html;
+
+  const showErrorMessage = (container, message) => {
+    const box = container || $('#transcriptionResult');
+    if (!box) return alert(message);
+    box.querySelectorAll('.fr-alert--error').forEach(el => el.remove());
+    const div = document.createElement('div');
+    div.className = 'fr-alert fr-alert--error fr-mt-2w';
+    div.setAttribute('role','alert');
+    div.style.padding = '0.5rem 1rem';
+    div.style.border = '1px solid red';
+    div.style.borderRadius = '4px';
+    div.textContent = message;
+    box.appendChild(div);
+    box.scrollTop = box.scrollHeight;
   };
 
   const downloadJSON = (obj, namePrefix) => {
     const blob = new Blob([JSON.stringify(obj, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
-    a.href = url; a.download = `${namePrefix}-${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
-    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    a.href = url;
+    a.download = `${namePrefix}-${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
+    document.body.appendChild(a); a.click(); a.remove();
     URL.revokeObjectURL(url);
   };
 
-  const showErrorMessage = (container, message) => {
-    container.querySelectorAll('.fr-alert--error').forEach(el => el.remove());
-    const errorDiv = document.createElement('div');
-    errorDiv.classList.add('fr-alert', 'fr-alert--error', 'fr-mt-2w');
-    errorDiv.setAttribute('role', 'alert');
-    errorDiv.style.padding = '0.5rem 1rem';
-    errorDiv.style.border = '1px solid red';
-    errorDiv.style.borderRadius = '4px';
-    errorDiv.textContent = message;
-    container.appendChild(errorDiv);
-    container.scrollTop = container.scrollHeight;
-  };
+  const secureContextOK = () =>
+    location.protocol === 'https:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1';
 
   // =========================
-  // Config & Static Data
+  // DOM
   // =========================
   const DOM = {
     recordButton:        $('#recordButton'),
@@ -50,10 +56,9 @@
     saveLogButton:       $('#saveLogButton'),
   };
 
-  const SpeakerLabels = { 'af':'Spreker','am':'ተናጋሪ','ar':'المتحدث','az':'Danışan','be':'Выступоўца','bg':'Говорещ','bn':'বক্তা','bs':'Govornik','ca':'Parlant','ceb':'Tigsulti','cs':'Mluvčí','cy':'Siaradwr','da':'Taler','de':'Sprecher','el':'Ομιλητής','en':'Speaker','en-gb':'Speaker','eo':'Parolanto','es':'Hablante','et':'Kõneleja','fa':'گوینده','fi':'Puhuja','fr':'Locuteur','ga':'Cainteoir','gl':'Falante','gu':'વક્તા','ha':'Mai magana','haw':'ʻŌlelo','he':'דובר','hi':'वक्ता','hmn':'Tus hais lus','hr':'Govornik','ht':'Pale','hu':'Beszélő','hy':'Խոսնակ','id':'Pembicara','ig':'Onye na-ekwu okwu','is':'Ræðumaður','it':'Parlante','ja':'話者','jv':'Pambicara','ka':'მომხსენებელი','kk':'Сөйлеуші','km':'អ្នកនិយាយ','kn':'ಭಾಷಣಗಾರ','ko':'화자','ku':'Axivkar','ky':'Сүйлөөчү','la':'Orator','lb':'Spriecher','lo':'ຜູ້ສຽງ','lt':'Kalbėtojas','lv':'Runātājs','mg':'Mpandahateny','mi':'Kaikōrero','mk':'Говорник','ml':'സംഭാഷകൻ','mn':'Яригч','mr':'वक्ते','ms':'Penutur','mt':'Kelliem','my':'ပြောသူ','ne':'वक्ता','nl':'Spreker','no':'Taler','ny':'Wolankhula','pa':'ਵਕਤਾ','pl':'Mówca','ps':'ویناوال','pt':'Falante','ro':'Vorbitor','ru':'Говорящий','rw':'Umuvugizi','sd':'مقر','si':'කථිකයා','sk':'Rečník','sl':'Govorec','sm':'Failauga','sn':'Mutauri','so':'Afhayeen','sq':'Folës','sr':'Govornik','st':'Sebui','su':'Narasumber','sv':'Talare','sw':'Mzungumzaji','ta':'பேச்சாளர்','te':'వక్త','tg':'Суханрон','th':'ผู้พูด','tr':'Konuşmacı','uk':'Доповідач','ur':'مقرر','uz':'Nutq so‘zlovchi','vi':'Người nói','xh':'Umlingani','yi':'רעדנער','yo':'Asọye','zh-cn':'说话人','zh-tw':'說話者','zu':'Isikhulumi' };
-
-  const Colors = ['#e6194b','#3cb44b','#ffe119','#4363d8','#f58231','#911eb4','#46f0f0','#f032e6','#bcf60c','#fabebe','#008080','#e6beff','#9a6324','#fffac8','#800000','#aaffc3','#808000','#ffd8b1','#000075','#808080'];
-
+  // =========================
+  // Config
+  // =========================
   const Net = {
     UPLOAD_URL: 'https://api-translate-rt.cloud-pi-native.com/upload',
     TTS_URL:    'https://api-translate-rt.cloud-pi-native.com/tts-proxy',
@@ -61,340 +66,343 @@
     TTS_VOICE:  'alloy',
     TTS_TONE:   'Speak in a cheerful and positive tone.',
     TTS_FORMAT: 'opus',
-    API_KEY:    '', // optionnel si proxy côté serveur
+    API_KEY:    '', // si nécessaire côté proxy
   };
 
   const Limits = {
     MAX_MESSAGES: 65536,
-    MAX_BUFFER_LENGTH: 4,
-//    minChunkDuration: 1500,
-//    maxChunkDuration: 6500,
-//    minSilenceMs: 500,
-//    minVoiceMs: 200,
-    minChunkDuration: 1500,
-    maxChunkDuration: 6500,
-    minSilenceMs: 1000,
-    minVoiceMs: 400,
-    TTS_FLUSH_MS: 10000,
+    minChunkMs: 1800,       // durée min avant envoi
+    maxChunkMs: 6500,       // hard cap
+    startGuardMs: 300,      // anti-coupure après (re)start
+    TTS_FLUSH_MS: 12000     // refresh "draft" si ça traîne
   };
 
+  // VAD (hystérésis/hangover)
   const VADParams = {
-    alphaLevel: 0.85,
-    alphaNoise: 0.995,
-    speechMargin: 3.0,
-    initNoiseFloor: 0.002,
-    intervalMs: 50,
+    positiveSpeechThreshold: 0.9,  // entrée parole (↑)
+    negativeSpeechThreshold: 0.7,  // sortie parole (↓)
+    redemptionFrames: 10,
+    minSpeechDuration: 0.30,       // s
+    minSilenceDuration: 0.60       // s (hangover)
   };
+
+  const Colors = ['#e6194b','#3cb44b','#ffe119','#4363d8','#f58231','#911eb4','#46f0f0','#f032e6','#bcf60c','#fabebe','#008080','#e6beff','#9a6324','#fffac8','#800000','#aaffc3','#808000','#ffd8b1','#000075','#808080'];
+  const SpeakerLabels = { fr:'Locuteur', en:'Speaker', 'en-gb':'Speaker', bg:'Говорещ', ro:'Vorbitor', es:'Hablante', de:'Sprecher', it:'Parlante' };
+  const speakerLabel = (lang) => SpeakerLabels[lang] || 'Speaker';
 
   // =========================
-  // State (réduit & centralisé)
+  // State
   // =========================
   const State = {
-    mediaRecorder: null,
-    audioContext: null,
-    analyser: null,
-    dataArray: null,
     stream: null,
-    audioChunks: [],
-    recordingStart: 0,
-    shouldRestartRecording: false,
-    hadSpeechSinceResume: false,
-    lastChunkHadSpeech: false,
+    recorder: null,
+    vad: null,
+    isSpeaking: false,
+    chunkStartedAt: 0,
+    hadSpeech: false,
+    guardUntil: 0,
 
-    // VAD
-    levelEMA: 0,
-    noiseFloor: VADParams.initNoiseFloor,
-    lastAboveTime: 0,
-    lastBelowTime: 0,
-    vadTimer: null,
-
-    // Diarisation / affichage
     voiceIndex: new Map(),
     voiceCounter: 1,
-    textBuffer: '',
     lastVoiceNumber: null,
-    flushTimeout: null,
-    fullTranscriptionLog: [],
 
-    // TTS
+    textBuffer: '',
+    fullTranscriptionLog: [],
+    draftBySpeaker: new Map(),
+
     ttsQueue: [],
-    ttsInProgress: false,
+    ttsBusy: false,
+
+    flushTimeout: null,
+
+    deps: {
+      dompurify: () => typeof DOMPurify !== 'undefined',
+      howler:    () => typeof Howl !== 'undefined',
+      recordrtc: () => typeof RecordRTC !== 'undefined',
+      vadweb:    () => typeof vad !== 'undefined', // IMPORTANT: global = vad
+      ort:       () => typeof ort !== 'undefined' || typeof onnxruntime !== 'undefined'
+    }
+  };
+
+  const missingDeps = () => {
+    const miss = [];
+    if (!State.deps.howler())    miss.push('howler (Howl)');
+    if (!State.deps.ort())       miss.push('onnxruntime-web (ort.js)');
+    if (!State.deps.vadweb())    miss.push('@ricky0123/vad-web (global "vad")');
+    // DOMPurify & RecordRTC sont optionnels (shim/unsafe ok)
+    return miss;
   };
 
   const resetVoiceIndexing = () => { State.voiceIndex.clear(); State.voiceCounter = 1; };
 
   // =========================
+  // Target language helpers (select + chips + localStorage)
+  // =========================
+  function getTargetLang() {
+    const v = DOM.langSelect?.value?.trim();
+    return v || localStorage.getItem('targetLang') || 'fr';
+  }
+  function setTargetLang(val) {
+    const v = (val || '').trim();
+    if (!v) return;
+    if (DOM.langSelect) DOM.langSelect.value = v;
+    localStorage.setItem('targetLang', v);
+    syncTargetLangUI();
+  }
+  function syncTargetLangUI() {
+    const v = getTargetLang();
+    document.querySelectorAll('.lang-chip').forEach(chip => {
+      const on = chip.dataset.lang === v;
+      chip.classList.toggle('selected', on);
+      chip.setAttribute('aria-pressed', on ? 'true' : 'false');
+    });
+  }
+
+  // =========================
+  // RecordRTC fallback shim (MediaRecorder)
+  // =========================
+  class SimpleRecorderShim {
+    constructor(stream, opts = {}) {
+      this.stream = stream;
+      this.mimeType = opts.mimeType || '';
+      this.chunks = [];
+      this.mr = null;
+    }
+    startRecording() {
+      const supported = [
+        this.mimeType,
+        'audio/webm;codecs=opus',
+        'audio/ogg;codecs=opus',
+        'audio/webm'
+      ].find(t => t && (window.MediaRecorder && MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(t))) || '';
+      this.mimeType = supported || this.mimeType;
+      this.chunks = [];
+      this.mr = new MediaRecorder(this.stream, this.mimeType ? { mimeType: this.mimeType } : {});
+      this.mr.ondataavailable = (e) => { if (e.data && e.data.size) this.chunks.push(e.data); };
+      this.mr.start();
+    }
+    stopRecording(cb) {
+      if (!this.mr) return cb && cb();
+      this.mr.onstop = () => { cb && cb(); };
+      try { this.mr.stop(); } catch { cb && cb(); }
+    }
+    getBlob() { return new Blob(this.chunks, { type: this.mimeType || 'audio/webm' }); }
+    reset() { this.chunks = []; this.mr = null; }
+  }
+  const makeRecorder = (stream, opts) => {
+    if (typeof RecordRTC !== 'undefined' && typeof RecordRTC === 'function') {
+      return new RecordRTC(stream, { type: 'audio', ...opts });
+    }
+    return new SimpleRecorderShim(stream, opts);
+  };
+
+  // =========================
   // Recorder
   // =========================
-  const Recorder = {
-    async initStream() {
-      if (State.audioContext) try { await State.audioContext.close(); } catch {}
-      if (State.stream) State.stream.getTracks().forEach(t => t.stop());
+  async function initStream() {
+    if (State.stream) try { State.stream.getTracks().forEach(t => t.stop()); } catch {}
+    State.stream = await navigator.mediaDevices.getUserMedia({
+      audio: { noiseSuppression:true, echoCancellation:true, autoGainControl:false, channelCount:1, sampleRate:48000 }
+    });
+  }
 
-      State.stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          noiseSuppression: true,
-          echoCancellation: true,
-          autoGainControl: true,
-          channelCount: 1,
-          sampleRate: 48000
+  function startRecorder() {
+    const mimeType =
+      (window.MediaRecorder && MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) ? 'audio/webm;codecs=opus' :
+      (window.MediaRecorder && MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported('audio/ogg;codecs=opus'))  ? 'audio/ogg;codecs=opus'  :
+      'audio/webm';
+
+    State.recorder = makeRecorder(State.stream, { mimeType, timeSlice: 0, disableLogs: true });
+    State.recorder.startRecording();
+    State.chunkStartedAt = now();
+    State.hadSpeech = false;
+    State.guardUntil = now() + Limits.startGuardMs;
+    log('Recorder démarré', mimeType, `(RecordRTC:${typeof RecordRTC !== 'undefined'})`);
+  }
+
+  function stopRecorder() {
+    try { State.recorder?.stopRecording?.(() => {}); } catch {}
+    State.recorder = null;
+  }
+
+  async function stopAndSendChunk() {
+    return new Promise((resolve) => {
+      if (!State.recorder) return resolve();
+      State.recorder.stopRecording(async () => {
+        const blob = State.recorder.getBlob();
+        // restart immédiat
+        State.recorder.reset();
+        State.recorder.startRecording();
+        State.chunkStartedAt = now();
+
+        if (!State.hadSpeech) { State.hadSpeech = false; return resolve(); }
+
+        try {
+          const fd = new FormData();
+          const ext = blob.type.includes('ogg') ? 'ogg' : 'webm';
+          fd.append('file', blob, `record.${ext}`);
+          fd.append('target_lang', getTargetLang());
+          fd.append('primary_lang', DOM.primaryLangSelect?.value || 'fr');
+
+          const r = await fetch(Net.UPLOAD_URL, { method:'POST', body:fd });
+          if (!r.ok) throw new Error(`Erreur API: ${r.status}`);
+          const j = await r.json();
+          Transcription.onResult(j);
+        } catch (e) {
+          console.error(e);
+          showErrorMessage(DOM.transcriptionResult, 'Erreur réseau : ' + (e.message || 'inconnue'));
+        } finally {
+          State.hadSpeech = false;
+          resolve();
         }
       });
+    });
+  }
 
-      State.audioContext = new AudioContext();
-      State.analyser = State.audioContext.createAnalyser();
-      State.analyser.fftSize = 2048;
-      State.dataArray = new Float32Array(State.analyser.fftSize);
-      State.audioContext.createMediaStreamSource(State.stream).connect(State.analyser);
-    },
+  // =========================
+  // VAD (vad-web)
+  // =========================
+  async function startVAD() {
+    if (!State.deps.vadweb()) {
+      log('VAD indisponible — capture sans découpe VAD.');
+      return;
+    }
+    if (State.vad) try { State.vad.destroy?.(); } catch {}
 
-    async start() {
-      resetVoiceIndexing();
-      if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) {
-        alert("Navigateur non compatible.");
-        return;
-      }
-
-      await Recorder.initStream();
-
-      const mimeType = getSupportedMimeType();
-      State.mediaRecorder = new MediaRecorder(State.stream, mimeType ? { mimeType } : {});
-      console.log('MediaRecorder mimeType :', State.mediaRecorder.mimeType);
-
-      State.audioChunks = [];
-      State.shouldRestartRecording = false;
-      State.hadSpeechSinceResume = false;
-
-      State.mediaRecorder.ondataavailable = (e) => { if (e.data && e.data.size) State.audioChunks.push(e.data); };
-
-      State.mediaRecorder.onstop = () => {
-        if (State.lastChunkHadSpeech && State.audioChunks.length) {
-          const blob = new Blob(State.audioChunks, { type: State.mediaRecorder.mimeType });
-          Network.sendAudio(blob);
+    State.vad = await vad.MicVAD.new({
+      stream: State.stream, // partage le micro
+      positiveSpeechThreshold: VADParams.positiveSpeechThreshold,
+      negativeSpeechThreshold: VADParams.negativeSpeechThreshold,
+      redemptionFrames: VADParams.redemptionFrames,
+      minSpeechDuration: VADParams.minSpeechDuration,
+      minSilenceDuration: VADParams.minSilenceDuration,
+      onSpeechStart: () => { State.isSpeaking = true; State.hadSpeech = true; },
+      onSpeechEnd: async () => {
+        if (now() < State.guardUntil) return;
+        const age = now() - State.chunkStartedAt;
+        const longEnough = age >= Limits.minChunkMs;
+        const tooLong    = age >= Limits.maxChunkMs;
+        if (longEnough || tooLong) {
+          await stopAndSendChunk();
+          State.guardUntil = now() + Limits.startGuardMs;
         }
-        State.audioChunks = [];
-        if (State.shouldRestartRecording) setTimeout(Recorder.restart, 0);
-      };
-
-      State.mediaRecorder.start();
-      State.recordingStart = now();
-      VAD.start();
-
-      UI.onRecordingState(true);
-    },
-
-    stop() {
-      VAD.stop();
-      try { if (State.mediaRecorder?.state !== 'inactive') State.mediaRecorder.stop(); } catch {}
-      if (State.audioContext) try { State.audioContext.close(); } catch {}
-      if (State.stream) State.stream.getTracks().forEach(t => t.stop());
-      UI.onRecordingState(false);
-
-      State.shouldRestartRecording = false;
-      State.ttsInProgress = false; State.ttsQueue = [];
-      State.textBuffer = ""; State.lastVoiceNumber = null;
-    },
-
-    restart() {
-      State.lastBelowTime = 0; State.lastAboveTime = 0;
-      State.shouldRestartRecording = false;
-      State.hadSpeechSinceResume = false;
-      if (State.mediaRecorder?.state === 'paused') State.mediaRecorder.resume();
-      else if (State.mediaRecorder?.state === 'inactive') State.mediaRecorder.start();
-      State.recordingStart = now();
-      VAD.start();
-    }
-  };
-
-  // =========================
-  // VAD
-  // =========================
-  const VAD = {
-    start() {
-      VAD.stop();
-      State.vadTimer = setInterval(VAD._tick, VADParams.intervalMs);
-    },
-    stop() {
-      if (State.vadTimer) { clearInterval(State.vadTimer); State.vadTimer = null; }
-    },
-    _tick() {
-      if (!State.mediaRecorder || State.mediaRecorder.state !== 'recording') return;
-
-      State.analyser.getFloatTimeDomainData(State.dataArray);
-      const rms = Math.sqrt(State.dataArray.reduce((s, v) => s + v*v, 0) / State.dataArray.length);
-
-      // EMA rapides/lentes
-      State.levelEMA = VADParams.alphaLevel * State.levelEMA + (1 - VADParams.alphaLevel) * rms;
-      const isBelow = State.levelEMA <= State.noiseFloor * VADParams.speechMargin;
-      if (isBelow) State.noiseFloor = VADParams.alphaNoise * State.noiseFloor + (1 - VADParams.alphaNoise) * State.levelEMA;
-
-      const t = now();
-      if (State.levelEMA > State.noiseFloor * VADParams.speechMargin) {
-        if (!State.lastAboveTime) State.lastAboveTime = t;
-        State.lastBelowTime = 0;
-        if (t - State.lastAboveTime > Limits.minVoiceMs) State.hadSpeechSinceResume = true;
-      } else {
-        if (!State.lastBelowTime) State.lastBelowTime = t;
-        State.lastAboveTime = 0;
-
-        // Silence prolongé → coupe si le chunk contient de la parole
-        if (t - State.lastBelowTime > Limits.minSilenceMs && t - State.recordingStart > Limits.minChunkDuration) {
-          if (State.hadSpeechSinceResume) {
-            State.lastChunkHadSpeech = true;
-            State.shouldRestartRecording = true;
-            VAD.stop();
-            try { State.mediaRecorder.stop(); } catch {}
-            State.hadSpeechSinceResume = false;
-            State.lastBelowTime = 0;
-            return;
-          }
-        }
+        State.isSpeaking = false;
       }
+    });
+    State.vad.start();
+    log('VAD démarré.');
 
-      // Coupe dure si chunk trop long — mais n'envoie que si parole
-      if (t - State.recordingStart >= Limits.maxChunkDuration) {
-        State.lastChunkHadSpeech = State.hadSpeechSinceResume;
-        State.shouldRestartRecording = true;
-        VAD.stop();
-        try { State.mediaRecorder.stop(); } catch {}
-        State.lastBelowTime = 0; State.lastAboveTime = 0;
-      }
-    }
-  };
+    // hard cap
+    const hardCapTimer = setInterval(async () => {
+      if (!State.recorder) return;
+      const age = now() - State.chunkStartedAt;
+      if (age >= Limits.maxChunkMs) await stopAndSendChunk();
+    }, 200);
+    State.vad._hardCapTimer = hardCapTimer;
+  }
 
-  // =========================
-  // Réseau (upload & TTS)
-  // =========================
-  const Network = {
-    async sendAudio(blob) {
-      try {
-        const ext =
-          blob.type.includes('webm') ? 'webm' :
-          blob.type.includes('ogg')  ? 'ogg'  :
-          blob.type.includes('opus') ? 'ogg'  : 'bin';
-
-        const fd = new FormData();
-        fd.append('file', blob, `record.${ext}`);
-        fd.append('target_lang', DOM.langSelect.value || 'fr');
-        fd.append('primary_lang', DOM.primaryLangSelect?.value || 'fr');
-
-        const res = await fetch(Net.UPLOAD_URL, { method: 'POST', body: fd });
-        if (!res.ok) throw new Error(`Erreur API: ${res.status}`);
-        const json = await res.json();
-        Transcription.onResult(json);
-      } catch (e) {
-        console.error('Erreur upload audio:', e);
-        showErrorMessage(DOM.transcriptionResult, "Erreur réseau : " + (e.message || "inconnue"));
-      }
-    },
-
-    async ttsSpeak(text, onStart, onEnd, onError) {
-      const payload = {
-        model: Net.TTS_MODEL,
-        input: text,
-        voice: Net.TTS_VOICE,
-        instructions: Net.TTS_TONE,
-        response_format: Net.TTS_FORMAT
-      };
-
-      try {
-        if (State.mediaRecorder?.state === 'recording') VAD.stop(), State.mediaRecorder.pause();
-
-        const response = await fetch(Net.TTS_URL, {
-          method: 'POST',
-          headers: { 'Authorization': `Bearer ${Net.API_KEY}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload)
-        });
-        if (!response.ok) throw new Error(`TTS: ${response.statusText}`);
-
-        const audioBlob = await response.blob();
-        const audioUrl = URL.createObjectURL(audioBlob);
-        const audio = new Audio(audioUrl);
-
-        onStart?.();
-        audio.addEventListener('ended', () => {
-          URL.revokeObjectURL(audioUrl);
-          onEnd?.();
-        });
-
-        await audio.play();
-      } catch (err) {
-        console.error('Erreur TTS:', err);
-        onError?.(err);
-      }
-    }
-  };
+  function stopVAD() {
+    try { if (State.vad?._hardCapTimer) clearInterval(State.vad._hardCapTimer); } catch {}
+    try { State.vad?.pause?.(); } catch {}
+    try { State.vad?.destroy?.(); } catch {}
+    State.vad = null;
+  }
 
   // =========================
-  // TTS Queue
+  // Réseau TTS + file
   // =========================
   const TTS = {
-    enqueue(phrase, domElement) {
-      if (!DOM.enableTTS?.checked || !phrase) return;
-      State.ttsQueue.push({ phrase, element: domElement });
+    enqueue(text, el) {
+      if (!DOM.enableTTS?.checked || !text) return;
+      State.ttsQueue.push({ text, el });
       TTS._process();
     },
     _process() {
-      if (State.ttsInProgress || State.ttsQueue.length === 0) return;
-      const { phrase, element } = State.ttsQueue.shift();
-      TTS._speak(phrase, element);
-    },
-    _speak(text, element) {
-      if (State.ttsInProgress) return;
-      State.ttsInProgress = true;
-
-      const onStart = () => { element?.classList.add('tts-current'); };
-      const onEnd = () => {
-        State.ttsInProgress = false;
-        element?.classList.remove('tts-current');
-        Recorder.restart();
-        TTS._process();
-      };
-      const onError = () => {
-        State.ttsInProgress = false;
-        element?.classList.remove('tts-current');
-        Recorder.restart();
-        TTS._process();
-      };
-
-      Network.ttsSpeak(text, onStart, onEnd, onError);
+      if (State.ttsBusy || State.ttsQueue.length === 0) return;
+      const { text, el } = State.ttsQueue.shift();
+      State.ttsBusy = true;
+      Network.ttsSpeak(text,
+        () => el?.classList.add('tts-current'),
+        () => { State.ttsBusy = false; el?.classList.remove('tts-current'); TTS._process(); },
+        () => { State.ttsBusy = false; el?.classList.remove('tts-current'); TTS._process(); }
+      );
     },
     cancelAll() {
       State.ttsQueue = [];
-      State.ttsInProgress = false;
-      document.querySelectorAll('.tts-current').forEach(el => el.classList.remove('tts-current'));
+      State.ttsBusy = false;
+      document.querySelectorAll('.tts-current').forEach(n => n.classList.remove('tts-current'));
+    }
+  };
+
+  const Network = {
+    async ttsSpeak(text, onStart, onEnd, onError) {
+      try {
+        stopVAD(); stopRecorder();
+
+        const payload = { model: Net.TTS_MODEL, input: text, voice: Net.TTS_VOICE, instructions: Net.TTS_TONE, response_format: Net.TTS_FORMAT };
+        const headers = { 'Content-Type': 'application/json' };
+        if (Net.API_KEY) headers.Authorization = `Bearer ${Net.API_KEY}`;
+        const res = await fetch(Net.TTS_URL, { method:'POST', headers, body: JSON.stringify(payload) });
+        if (!res.ok) throw new Error(`TTS: ${res.status} ${res.statusText}`);
+
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        if (typeof Howl === 'undefined') throw new Error('howler non chargé');
+
+        onStart?.();
+        await new Promise((ok, ko) => {
+          const h = new Howl({ src: [url], format: ['opus','ogg','webm'] });
+          h.once('end', ok);
+          h.once('loaderror', (_, msg) => ko(new Error(msg)));
+          h.play();
+        });
+        onEnd?.();
+      } catch (e) {
+        console.error(e);
+        onError?.(e);
+      } finally {
+        // reprise
+        try {
+          await initStream();
+          startRecorder();
+          await startVAD();
+        } catch (e) {
+          console.error('Reprise après TTS impossible:', e);
+          showErrorMessage(DOM.transcriptionResult, 'Impossible de reprendre la capture audio. Recharge la page.');
+        }
+      }
     }
   };
 
   // =========================
-  // Transcription rendering
+  // Transcription rendering (draft par locuteur)
   // =========================
   const Transcription = {
     resetFlushTimer() {
       if (State.flushTimeout) clearTimeout(State.flushTimeout);
       State.flushTimeout = setTimeout(() => {
-        if (State.textBuffer && State.textBuffer.trim().length > 0) {
-          Transcription._pushToDom(State.textBuffer, State.lastVoiceNumber ?? 0);
-          State.textBuffer = "";
+        if (State.textBuffer && State.textBuffer.trim().length > 0 && State.lastVoiceNumber != null) {
+          Transcription._renderDraft(State.textBuffer, State.lastVoiceNumber);
         }
       }, Limits.TTS_FLUSH_MS);
     },
 
     onResult(result) {
+      if (!DOM.transcriptionResult) return;
       if (result?.diarization?.noise) return;
-      if (!DOM.transcriptionResult || !result?.diarization?.identifier) return;
 
-      const identifier    = result.diarization.identifier.slice(-4);
-      const transcription = result?.transcription || "";
-      if (!transcription.trim()) return;
+      const identifier = (result?.diarization?.identifier || '').slice(-4) || 'anon';
+      const transcription = (result?.transcription || '').trim();
+      if (!transcription) return;
 
-      const targetLang  = DOM.langSelect.value || 'fr';
+      const targetLang  = getTargetLang();
       const primaryLang = DOM.primaryLangSelect?.value || 'fr';
 
-      const tradKeys = [`translation_${primaryLang}`, `translation_${targetLang}`];
-      const translated = tradKeys.map(k => result[k]).find(Boolean) || transcription;
+      const t1 = result?.[`translation_${primaryLang}`];
+      const t2 = result?.[`translation_${targetLang}`];
+      const translated = (t1 || t2 || '').trim();
 
-      const phraseForTTS = (translated && translated !== transcription) ? translated : null;
+      const phraseForTTS = translated && translated !== transcription ? translated : null;
       const phraseToDisplay = phraseForTTS
         ? `${translated} <span style="opacity:0.65;">(${transcription})</span>`
         : transcription;
@@ -402,14 +410,63 @@
       if (!State.voiceIndex.has(identifier)) State.voiceIndex.set(identifier, State.voiceCounter++);
       const voiceNumber = State.voiceIndex.get(identifier);
 
-      if (State.lastVoiceNumber !== null && State.lastVoiceNumber !== voiceNumber && State.textBuffer) {
-        Transcription._pushToDom(State.textBuffer, State.lastVoiceNumber);
-        State.textBuffer = "";
+      if (State.lastVoiceNumber !== null && State.lastVoiceNumber !== voiceNumber) {
+        if (State.textBuffer) {
+          Transcription._pushToDom(State.textBuffer, State.lastVoiceNumber);
+          State.textBuffer = "";
+        }
+        Transcription._finalizeDraft(State.lastVoiceNumber);
       }
       State.lastVoiceNumber = voiceNumber;
 
-      Transcription._pushToDom(phraseToDisplay, voiceNumber, phraseForTTS);
-      Transcription.resetFlushTimer();
+      const baseForFinal = (translated || transcription);
+      const looksFinal = /[.!?…](?:\s*[”)"\]\}»]*)$/.test(baseForFinal);
+      const tooLong = (State.textBuffer.length + phraseToDisplay.length) > 220;
+
+      State.textBuffer = (State.textBuffer ? (State.textBuffer + " ") : "") + phraseToDisplay;
+
+      if (looksFinal || tooLong) {
+        if (State.draftBySpeaker.has(voiceNumber)) {
+          const draft = State.draftBySpeaker.get(voiceNumber);
+          draft.div.remove();
+          State.draftBySpeaker.delete(voiceNumber);
+        }
+        Transcription._pushToDom(State.textBuffer, voiceNumber, phraseForTTS);
+        State.textBuffer = "";
+        Transcription._finalizeDraft(voiceNumber);
+      } else {
+        Transcription._renderDraft(State.textBuffer, voiceNumber);
+        Transcription.resetFlushTimer();
+      }
+    },
+
+    _renderDraft(text, voiceNumber) {
+      const color = Colors[(voiceNumber - 1) % Colors.length] || '#000';
+      const lang  = DOM.primaryLangSelect?.value || 'en';
+      const label = speakerLabel(lang);
+
+      let draft = State.draftBySpeaker.get(voiceNumber);
+      if (!draft) {
+        const div = document.createElement('div');
+        div.classList.add('tts-line', 'draft-line');
+        div.style.opacity = '0.85';
+        div.style.marginBottom = '5px';
+        DOM.transcriptionResult.appendChild(div);
+        draft = { div, text: '' };
+        State.draftBySpeaker.set(voiceNumber, draft);
+      }
+
+      draft.text = text;
+      draft.div.innerHTML = safeHTML(`<strong style="color:${color}">${label} ${voiceNumber}:</strong> ${text} <span style="opacity:0.5">…</span>`);
+      DOM.transcriptionResult.scrollTop = DOM.transcriptionResult.scrollHeight;
+    },
+
+    _finalizeDraft(voiceNumber) {
+      const draft = State.draftBySpeaker.get(voiceNumber);
+      if (!draft) return;
+      draft.div.classList.remove('draft-line');
+      draft.div.style.opacity = '1';
+      State.draftBySpeaker.delete(voiceNumber);
     },
 
     _pushToDom(phrase, voiceNumber, ttsText) {
@@ -419,15 +476,14 @@
         DOM.transcriptionResult.removeChild(DOM.transcriptionResult.firstChild);
 
       const color = Colors[(voiceNumber - 1) % Colors.length] || '#000';
-      const lang = DOM.primaryLangSelect?.value || 'en';
-      const label = SpeakerLabels[lang] || 'Speaker';
+      const lang  = DOM.primaryLangSelect?.value || 'en';
+      const label = speakerLabel(lang);
 
       const msgDiv = document.createElement('div');
-      msgDiv.innerHTML = `<strong style="color:${color}">${label} ${voiceNumber}:</strong> ${phrase}`;
-      msgDiv.style.marginBottom = '5px';
       msgDiv.classList.add('tts-line');
+      msgDiv.style.marginBottom = '5px';
+      msgDiv.innerHTML = safeHTML(`<strong style="color:${color}">${label} ${voiceNumber}:</strong> ${phrase}`);
 
-      // Append async pour laisser respirer le main thread
       setTimeout(() => {
         DOM.transcriptionResult.appendChild(msgDiv);
         DOM.transcriptionResult.scrollTop = DOM.transcriptionResult.scrollHeight;
@@ -444,33 +500,26 @@
   };
 
   // =========================
-  // UI bindings
+  // UI
   // =========================
   const UI = {
+    _updateRecordingIndicator() {
+      if (!DOM.recordButton || !DOM.stopButton || !DOM.recordingIndicator) return;
+      const isRecording = DOM.recordButton.disabled && !DOM.stopButton.disabled;
+      DOM.recordingIndicator.classList.toggle('active', isRecording);
+      DOM.recordButton.innerHTML = isRecording
+        ? '<span class="fr-icon-loader-3-line fr-icon--sm fr-mr-1w" aria-hidden="true"></span>Enregistrement en cours...'
+        : '<span class="fr-icon-play-line fr-icon--sm fr-mr-1w" aria-hidden="true"></span>Commencer l\'enregistrement';
+      DOM.recordButton.classList.toggle('fr-btn--secondary', isRecording);
+    },
+    onRecordingState(isRecording) {
+      if (!DOM.recordButton || !DOM.stopButton) return;
+      DOM.recordButton.disabled = isRecording;
+      DOM.stopButton.disabled = !isRecording;
+      UI._updateRecordingIndicator();
+    },
     init() {
-      // Chips & select (langue principale)
-      DOM.primaryLangChips.forEach(chip => chip.addEventListener('click', () => {
-        DOM.primaryLangSelect.value = chip.dataset.lang;
-        UI._highlightPrimaryChip();
-        DOM.primaryLangSelect.dispatchEvent(new Event('change'));
-      }));
-
-      if (DOM.primaryLangSelect) {
-        DOM.primaryLangSelect.addEventListener('change', UI._highlightPrimaryChip);
-        const saved = localStorage.getItem('primaryLang');
-        if (saved) DOM.primaryLangSelect.value = saved;
-        UI._highlightPrimaryChip();
-        DOM.primaryLangSelect.addEventListener('change', e => localStorage.setItem('primaryLang', e.target.value));
-      }
-
-      // Indicator
-      if (DOM.recordButton && DOM.stopButton && DOM.recordingIndicator) {
-        const mo = new MutationObserver(UI._updateRecordingIndicator);
-        [DOM.recordButton, DOM.stopButton].forEach(btn => mo.observe(btn, { attributes: true }));
-        UI._updateRecordingIndicator();
-      }
-
-      // Toggle TTS
+      // TTS toggle
       if (DOM.enableTTS) {
         const savedTTS = localStorage.getItem('ttsEnabled');
         if (savedTTS !== null) DOM.enableTTS.checked = savedTTS === 'true';
@@ -480,54 +529,115 @@
         });
       }
 
-      // Chips langue destination
-      const chips = $$('.lang-chip');
-      chips.forEach(chip => chip.addEventListener('click', () => {
-        DOM.langSelect.value = chip.dataset.lang;
-        UI._highlightLangChips();
-        DOM.langSelect.dispatchEvent(new Event('change'));
+      // Primary language chips
+      DOM.primaryLangChips.forEach(chip => chip.addEventListener('click', () => {
+        if (!DOM.primaryLangSelect) return;
+        DOM.primaryLangSelect.value = chip.dataset.lang;
+        DOM.primaryLangSelect.dispatchEvent(new Event('change'));
       }));
-      if (DOM.langSelect) {
-        DOM.langSelect.addEventListener('change', UI._highlightLangChips);
-        UI._highlightLangChips();
-      }
+      DOM.primaryLangSelect?.addEventListener('change', (e) => {
+        localStorage.setItem('primaryLang', e.target.value);
+      });
+      const savedPrimary = localStorage.getItem('primaryLang');
+      if (savedPrimary && DOM.primaryLangSelect) DOM.primaryLangSelect.value = savedPrimary;
+
+      // Target language (select + chips)
+      (function bindTargetLang() {
+        const savedTL = localStorage.getItem('targetLang');
+        if (savedTL) {
+          if (DOM.langSelect) DOM.langSelect.value = savedTL;
+        } else if (DOM.langSelect?.value) {
+          localStorage.setItem('targetLang', DOM.langSelect.value);
+        }
+        syncTargetLangUI();
+
+        DOM.langSelect?.addEventListener('change', (e) => setTargetLang(e.target.value));
+        document.addEventListener('click', (ev) => {
+          const chip = ev.target.closest?.('.lang-chip');
+          if (!chip) return;
+          const lang = chip.dataset.lang;
+          if (!lang) return;
+          setTargetLang(lang);
+          if (DOM.langSelect) {
+            const prev = DOM.langSelect.value;
+            if (prev !== lang) DOM.langSelect.dispatchEvent(new Event('change'));
+          }
+        });
+      })();
 
       // Save log
       DOM.saveLogButton?.addEventListener('click', () => downloadJSON(State.fullTranscriptionLog, 'transcription'));
-    },
 
-    _highlightPrimaryChip() {
-      DOM.primaryLangChips.forEach(c => c.classList.toggle('selected', DOM.primaryLangSelect.value === c.dataset.lang));
-    },
+      // Buttons
+      DOM.recordButton?.addEventListener('click', startAll);
+      DOM.stopButton?.addEventListener('click', stopAll);
 
-    _highlightLangChips() {
-      document.querySelectorAll('.lang-chip').forEach(c => c.classList.toggle('selected', DOM.langSelect.value === c.dataset.lang));
-    },
+      // Indicator updates
+      if (DOM.recordButton && DOM.stopButton && DOM.recordingIndicator) {
+        const mo = new MutationObserver(UI._updateRecordingIndicator);
+        [DOM.recordButton, DOM.stopButton].forEach(btn => mo.observe(btn, { attributes: true }));
+        UI._updateRecordingIndicator();
+      }
 
-    _updateRecordingIndicator() {
-      const isRecording = DOM.recordButton.disabled && !DOM.stopButton.disabled;
-      DOM.recordingIndicator.classList.toggle('active', isRecording);
-      DOM.recordButton.innerHTML = isRecording
-        ? '<span class="fr-icon-loader-3-line fr-icon--sm fr-mr-1w" aria-hidden="true"></span>Enregistrement en cours...'
-        : '<span class="fr-icon-play-line fr-icon--sm fr-mr-1w" aria-hidden="true"></span>Commencer l\'enregistrement';
-      DOM.recordButton.classList.toggle('fr-btn--secondary', isRecording);
-    },
-
-    onRecordingState(isRecording) {
-      DOM.recordButton.disabled = isRecording;
-      DOM.stopButton.disabled = !isRecording;
-      DOM.recordButton.classList.toggle('recording-active', isRecording);
-      UI._updateRecordingIndicator();
+      UI.onRecordingState(false);
+      log('UI initialisée. Deps manquantes ?', missingDeps());
     }
   };
 
   // =========================
-  // Events
+  // Lifecycle
   // =========================
-  document.addEventListener('DOMContentLoaded', () => {
-    UI.init();
-    DOM.recordButton?.addEventListener('click', Recorder.start);
-    DOM.stopButton?.addEventListener('click', Recorder.stop);
-  });
+  async function startAll() {
+    log('Clic: Commencer l’enregistrement');
+    if (!secureContextOK()) {
+      showErrorMessage(DOM.transcriptionResult, 'Cette fonctionnalité nécessite HTTPS (ou localhost).');
+      return;
+    }
+    try {
+      resetVoiceIndexing();
+      await initStream();
+      startRecorder();
 
+      // Démarre le VAD si dispo
+      await startVAD();
+
+      UI.onRecordingState(true);
+      log('Capture démarrée.');
+    } catch (e) {
+      console.error(e);
+      if (e?.name === 'NotAllowedError') {
+        showErrorMessage(DOM.transcriptionResult, 'Accès micro refusé. Autorise le micro dans le navigateur.');
+      } else if (e?.name === 'NotFoundError') {
+        showErrorMessage(DOM.transcriptionResult, 'Aucun micro disponible.');
+      } else {
+        showErrorMessage(DOM.transcriptionResult, 'Échec du démarrage de l’enregistrement : ' + (e.message || e));
+      }
+      UI.onRecordingState(false);
+    }
+  }
+
+  function stopAll() {
+    log('Clic: Stop');
+    try { stopVAD(); } catch {}
+    try { stopRecorder(); } catch {}
+    try { State.stream?.getTracks().forEach(t => t.stop()); } catch {}
+    State.stream = null;
+    State.textBuffer = ''; State.lastVoiceNumber = null;
+    State.draftBySpeaker.clear();
+    State.ttsBusy = false; State.ttsQueue = [];
+    UI.onRecordingState(false);
+    log('Capture arrêtée.');
+  }
+
+  // =========================
+  // Boot
+  // =========================
+  function boot() {
+    UI.init();
+  }
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', boot);
+  } else {
+    boot();
+  }
 })();
