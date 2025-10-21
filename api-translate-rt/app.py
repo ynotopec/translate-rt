@@ -1,5 +1,5 @@
 # /home/ailab/api-translate-rt/app.py
-import os, json, tempfile, subprocess, re, logging
+import os, json, re, logging
 from functools import lru_cache
 from typing import Dict, Any
 
@@ -155,24 +155,6 @@ def build_translations(txt: str, detected: str, primary: str, target: str) -> Di
             log(f'[TRANSLATION ERROR target={lg}] {e}')
             out[f'translation_{lg}'] = txt
     return out
-
-def call_tts_webm(text: str, voice: str, instructions: str) -> bytes:
-    payload = {
-        'model':'gpt-4o-mini-tts',
-        'input': text,
-        'voice': voice,
-        'instructions': instructions,
-        'response_format':'opus'
-    }
-    return post(Cfg.TTS_URL, headers={'Authorization': f'Bearer {Cfg.TTS_API_KEY}','Content-Type':'application/json'}, json=payload).content
-
-def call_tts_pcm16le(text: str, voice: str, instructions: str) -> bytes:
-    webm = call_tts_webm(text, voice, instructions)
-    with tempfile.NamedTemporaryFile(suffix='.webm') as fi, tempfile.NamedTemporaryFile(suffix='.pcm') as fo:
-        fi.write(webm); fi.flush()
-        subprocess.check_output(['ffmpeg','-y','-i',fi.name,'-f','s16le','-acodec','pcm_s16le','-ar','16000','-ac','1',fo.name], stderr=subprocess.DEVNULL)
-        fo.seek(0)
-        return fo.read()
 
 # ────────────────────────────── Flask app ──────────────────────────────
 app = Flask(__name__)
