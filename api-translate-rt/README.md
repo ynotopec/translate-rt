@@ -11,7 +11,7 @@ flowchart LR
         Player((Lecteur audio))
     end
 
-    subgraph Backend[Flask]
+    subgraph Backend[FastAPI]
         direction TB
         UploadEndpoint["POST /upload"]
         TTSEndpoint["POST /tts-proxy"]
@@ -66,7 +66,7 @@ Populate the environment variables described below before launching `app.py`. Th
 | `DIARIZATION_TOKEN` | ⚙️ | Enables diarisation calls to `Cfg.DIAR_URL` when present. |
 | `TTS_API_KEY` | ⚙️ | Required for `/tts-proxy` responses. |
 | `TTS_API_URL` | ⚙️ | Overrides the default text-to-speech endpoint. |
-| `SERVER_NAME` | ⚙️ | Host interface for the Flask server (defaults to `0.0.0.0`). |
+| `SERVER_NAME` | ⚙️ | Host interface for the FastAPI server (defaults to `0.0.0.0`). |
 | `SERVER_PORT` | ⚙️ | Listening port (defaults to `8080`). |
 
 > ℹ️ Environment variables marked with ⚙️ are optional; omit them to rely on the defaults baked into [`app.py`](app.py).
@@ -128,5 +128,5 @@ The response streams an Opus audio payload suitable for immediate playback in th
 
 ## Related files
 
-* [`../static/js/code.js`](../static/js/code.js) – frontend logic that connects to `/upload` and `/tts-proxy`.
+* [`../frontend/static/js/code.js`](../frontend/static/js/code.js) – frontend logic that connects to `/upload` and `/tts-proxy`.
 * [`mini_OpenAPI.yaml`](mini_OpenAPI.yaml) – OpenAPI snippet that can be imported into API tooling.
