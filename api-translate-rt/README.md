@@ -1,6 +1,6 @@
 # api-translate-rt
 
-Backend service that powers the translate-rt prototype. It exposes synchronous REST endpoints for chunk-based transcription/translation as well as a realtime Socket.IO namespace capable of low-latency streaming with voice activity detection (VAD) and optional text-to-speech (TTS).
+Backend service that powers the translate-rt prototype. It exposes synchronous REST endpoints for chunk-based transcription/translation and a text-to-speech proxy used by the frontend.
 
 ## Diagramme d'architecture API
 
@@ -8,19 +8,16 @@ Backend service that powers the translate-rt prototype. It exposes synchronous R
 flowchart LR
     subgraph Client[Client web / frontend]
         Uploader((Upload chunk))
-        Streamer((Flux WebSocket))
         Player((Lecteur audio))
     end
 
-    subgraph Backend[Flask + Socket.IO]
+    subgraph Backend[Flask]
         direction TB
         UploadEndpoint["POST /upload"]
         TTSEndpoint["POST /tts-proxy"]
-        RealtimeNS["Namespace Socket.IO /realtime\n& route WebSocket /v1/realtime"]
 
         subgraph Services[Services internes]
             direction TB
-            VAD[VAD WebRTC]
             WhisperCall[(Appel Whisper)]
             DiarCall[(Appel Diarisation)]
             Translator[(Chat Completions Traduction)]
@@ -54,15 +51,6 @@ flowchart LR
     TTSAPI --> TTSCall
     TTSCall -->|Flux Opus| TTSEndpoint
     TTSEndpoint --> Player
-
-    Streamer -->|Frames Opus 24 kHz| RealtimeNS
-    RealtimeNS --> VAD
-    VAD --> WhisperCall
-    RealtimeNS --> Translator
-    RealtimeNS --> TTSCall
-    WhisperCall --> RealtimeNS
-    Translator --> RealtimeNS
-    TTSCall --> RealtimeNS -->|Transcrits + audio synthèse| Streamer
 ```
 
 ## Environment configuration
@@ -76,12 +64,10 @@ Populate the environment variables described below before launching `app.py`. Th
 | `OPENAI_API_BASE` | ⚙️ | Base URL of the translation provider (defaults to the OpenAI public API). |
 | `OPENAI_API_MODEL` | ⚙️ | Chat-completions model name used for translations (defaults to `gpt-oss`). |
 | `DIARIZATION_TOKEN` | ⚙️ | Enables diarisation calls to `Cfg.DIAR_URL` when present. |
-| `TTS_API_KEY` | ⚙️ | Required for `/tts-proxy` and realtime audio playback. |
+| `TTS_API_KEY` | ⚙️ | Required for `/tts-proxy` responses. |
 | `TTS_API_URL` | ⚙️ | Overrides the default text-to-speech endpoint. |
-| `API_TOKENS` | ⚙️ | Comma-separated list of accepted bearer tokens for the `/realtime` namespace. |
-| `SERVER_NAME` | ⚙️ | Host interface for the Flask + Socket.IO server (defaults to `0.0.0.0`). |
-| `SERVER_PORT` | ⚙️ | Listening port (defaults to `5001`). |
-| `VAD_AGGR` | ⚙️ | Aggressiveness level (0–3) for the WebRTC VAD used during realtime streaming. |
+| `SERVER_NAME` | ⚙️ | Host interface for the Flask server (defaults to `0.0.0.0`). |
+| `SERVER_PORT` | ⚙️ | Listening port (defaults to `8080`). |
 
 > ℹ️ Environment variables marked with ⚙️ are optional; omit them to rely on the defaults baked into [`app.py`](app.py).
 
@@ -91,7 +77,7 @@ Populate the environment variables described below before launching `app.py`. Th
 python3 -m venv .venv
 source .venv/bin/activate
 pip install --upgrade pip
-pip install -r requirements.txt webrtcvad
+pip install -r requirements.txt
 python app.py
 ```
 
@@ -140,13 +126,7 @@ Use this endpoint to send discrete chunks recorded in the browser or uploaded fr
 
 The response streams an Opus audio payload suitable for immediate playback in the browser.
 
-## Realtime namespace `/realtime`
-
-The Socket.IO namespace accepts WebM/Opus frames encoded at 24 kHz. It performs VAD on the server side, forwards buffered audio to Whisper, emits interim and final transcripts, and—when TTS is enabled—streams back Opus audio blocks. Authentication is optional and controlled through the `API_TOKENS` variable.
-
-Refer to the implementation in [`app.py`](app.py) for the list of message types (`transcript_temp`, `transcript_final`, `audio`, `turn_done`, …).
-
 ## Related files
 
-* [`../static/js/code.js`](../static/js/code.js) – frontend logic that connects to `/upload`, `/tts-proxy` and the realtime Socket.IO namespace.
+* [`../static/js/code.js`](../static/js/code.js) – frontend logic that connects to `/upload` and `/tts-proxy`.
 * [`mini_OpenAPI.yaml`](mini_OpenAPI.yaml) – OpenAPI snippet that can be imported into API tooling.
