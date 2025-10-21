@@ -2,6 +2,69 @@
 
 Backend service that powers the translate-rt prototype. It exposes synchronous REST endpoints for chunk-based transcription/translation as well as a realtime Socket.IO namespace capable of low-latency streaming with voice activity detection (VAD) and optional text-to-speech (TTS).
 
+## Diagramme d'architecture API
+
+```mermaid
+flowchart LR
+    subgraph Client[Client web / frontend]
+        Uploader((Upload chunk))
+        Streamer((Flux WebSocket))
+        Player((Lecteur audio))
+    end
+
+    subgraph Backend[Flask + Socket.IO]
+        direction TB
+        UploadEndpoint["POST /upload"]
+        TTSEndpoint["POST /tts-proxy"]
+        RealtimeNS["Namespace Socket.IO /realtime\n& route WebSocket /v1/realtime"]
+
+        subgraph Services[Services internes]
+            direction TB
+            VAD[VAD WebRTC]
+            WhisperCall[(Appel Whisper)]
+            DiarCall[(Appel Diarisation)]
+            Translator[(Chat Completions Traduction)]
+            TTSCall[(Appel TTS)]
+        end
+    end
+
+    subgraph Providers[API externes]
+        WhisperAPI{{Whisper transcription}}
+        DiarAPI{{API de diarisation}}
+        OpenAI{{API OpenAI / GPT}}
+        TTSAPI{{API TTS}}
+    end
+
+    Uploader -->|WebM/Opus| UploadEndpoint
+    UploadEndpoint --> WhisperCall
+    UploadEndpoint --> DiarCall
+    WhisperCall --> WhisperAPI
+    DiarCall --> DiarAPI
+    WhisperAPI --> WhisperCall
+    DiarAPI --> DiarCall
+    WhisperCall --> Translator
+    Translator --> OpenAI
+    OpenAI --> Translator
+    Translator --> UploadEndpoint
+    UploadEndpoint -->|JSON transcription + traductions| Client
+
+    Player --> TTSEndpoint
+    TTSEndpoint --> TTSCall
+    TTSCall --> TTSAPI
+    TTSAPI --> TTSCall
+    TTSCall -->|Flux Opus| TTSEndpoint
+    TTSEndpoint --> Player
+
+    Streamer -->|Frames Opus 24 kHz| RealtimeNS
+    RealtimeNS --> VAD
+    VAD --> WhisperCall
+    RealtimeNS --> Translator
+    RealtimeNS --> TTSCall
+    WhisperCall --> RealtimeNS
+    Translator --> RealtimeNS
+    TTSCall --> RealtimeNS -->|Transcrits + audio synthèse| Streamer
+```
+
 ## Environment configuration
 
 Populate the environment variables described below before launching `app.py`. The root project contains a [.env.example](../.env.example) file that can be copied to `.env` and customised for local runs.
