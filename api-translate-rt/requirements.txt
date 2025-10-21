@@ -1,21 +1,10 @@
 #fastapi
 #uvicorn[standard]
 #requests
-#webrtcvad
-#numpy
 #openai
 #langdetect
-#flask-socketio
-#flask-sock
-#eventlet
 
 flask
 flask-cors
-flask-socketio
-flask-sock
-simple-websocket
 requests
-numpy
-webrtcvad
 langdetect
-eventlet
