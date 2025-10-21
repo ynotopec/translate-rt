@@ -16,7 +16,7 @@ Real-time speech translation prototype built with a lightweight Flask frontend a
 
 ```mermaid
 flowchart TD
-    subgraph Browser[Browser (frontend/static/html/index.html & static/js/code.js)]
+    subgraph Browser["Browser<br/>(frontend/static/html/index.html<br/>+ static/js/code.js)"]
         U[User actions<br/>record/stop buttons,<br/>language selectors]
         UI[DOM binding & DSFR layout]
         Recorder[Recorder module<br/>(MediaRecorder + getUserMedia)]
@@ -34,10 +34,15 @@ flowchart TD
     end
 
     U --> UI --> Recorder --> VAD --> Chunker --> Network
-    Network --> Upload --> Network
-    Network --> Renderer --> UI
-    Renderer --> TTSQueue --> TTSProxy --> TTSQueue
-    Network <-- Realtime --> Renderer
+    Network --> Upload
+    Upload --> Network
+    Network --> Renderer
+    Renderer --> UI
+    Renderer --> TTSQueue
+    TTSQueue --> TTSProxy
+    TTSProxy --> TTSQueue
+    Network <-- Realtime
+    Realtime --> Renderer
 ```
 
 The diagram highlights how the Flask-served single-page app orchestrates browser APIs. `MediaRecorder` captures Opus audio frames, the custom voice activity detector segments speech before uploading chunks to the REST backend, and the realtime Socket.IO channel streams live transcripts back to the renderer. When text-to-speech is enabled, translations are queued for playback by calling the `/tts-proxy` endpoint and playing the returned Opus audio in the browser.
