@@ -1,10 +1,5 @@
-#fastapi
-#uvicorn[standard]
-#requests
-#openai
-#langdetect
-
-flask
-flask-cors
+fastapi
+uvicorn[standard]
 requests
 langdetect
+python-multipart
