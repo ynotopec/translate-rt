@@ -12,6 +12,36 @@ Real-time speech translation prototype built with a lightweight Flask frontend a
 | `api-translate-rt/` | Standalone FastAPI + Socket.IO backend providing `/upload`, `/tts-proxy` and realtime streaming endpoints. |
 | `api-translate-rt/mini_OpenAPI.yaml` | Compact OpenAPI description of the public HTTP endpoints exposed by the API. |
 
+## Frontend architecture diagram
+
+```mermaid
+flowchart TD
+    subgraph Browser[Browser (frontend/static/html/index.html & static/js/code.js)]
+        U[User actions<br/>record/stop buttons,<br/>language selectors]
+        UI[DOM binding & DSFR layout]
+        Recorder[Recorder module<br/>(MediaRecorder + getUserMedia)]
+        VAD[Custom VAD loop<br/>and speech detection]
+        Chunker[Audio chunk buffer<br/>State.audioChunks]
+        Network[Network helpers<br/>fetch + Socket.IO]
+        Renderer[UI renderer<br/>transcript & translation]
+        TTSQueue[TTS playback queue]
+    end
+
+    subgraph API[api-translate-rt service]
+        Upload[/POST /upload/]
+        Realtime[/Socket.IO /realtime/]
+        TTSProxy[/POST /tts-proxy/]
+    end
+
+    U --> UI --> Recorder --> VAD --> Chunker --> Network
+    Network --> Upload --> Network
+    Network --> Renderer --> UI
+    Renderer --> TTSQueue --> TTSProxy --> TTSQueue
+    Network <-- Realtime --> Renderer
+```
+
+The diagram highlights how the Flask-served single-page app orchestrates browser APIs. `MediaRecorder` captures Opus audio frames, the custom voice activity detector segments speech before uploading chunks to the REST backend, and the realtime Socket.IO channel streams live transcripts back to the renderer. When text-to-speech is enabled, translations are queued for playback by calling the `/tts-proxy` endpoint and playing the returned Opus audio in the browser.
+
 ## Prerequisites
 
 * Python 3.10 or newer.
