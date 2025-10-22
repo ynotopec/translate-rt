@@ -16,18 +16,18 @@ Real-time speech translation prototype built with a lightweight Flask frontend a
 
 ```mermaid
 flowchart TD
-    subgraph Browser["Browser<br/>(frontend/static/html/index.html<br/>+ static/js/code.js)"]
-        U[User actions<br/>record/stop buttons,<br/>language selectors]
-        UI[DOM binding & DSFR layout]
-        Recorder[Recorder module<br/>(MediaRecorder + getUserMedia)]
-        VAD[Custom VAD loop<br/>and speech detection]
-        Chunker[Audio chunk buffer<br/>State.audioChunks]
-        Network[Network helpers<br/>fetch + Socket.IO]
-        Renderer[UI renderer<br/>transcript & translation]
-        TTSQueue[TTS playback queue]
+    subgraph Browser["Browser\n(frontend/static/html/index.html\n+ static/js/code.js)"]
+        U["User actions\nrecord/stop buttons,\nlanguage selectors"]
+        UI["DOM binding & DSFR layout"]
+        Recorder["Recorder module\n(MediaRecorder + getUserMedia)"]
+        VAD["Custom VAD loop\nand speech detection"]
+        Chunker["Audio chunk buffer\nState.audioChunks"]
+        Network["Network helpers\nfetch + Socket.IO"]
+        Renderer["UI renderer\ntranscript & translation"]
+        TTSQueue["TTS playback queue"]
     end
 
-    subgraph API[api-translate-rt service]
+    subgraph API["api-translate-rt service"]
         Upload[/POST /upload/]
         Realtime[/Socket.IO /realtime/]
         TTSProxy[/POST /tts-proxy/]
