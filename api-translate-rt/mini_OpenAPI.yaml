@@ -84,6 +84,35 @@ paths:
           description: Requête invalide
         "500":
           description: Erreur serveur
+  /translate-text:
+    post:
+      summary: Traduction directe d'un texte sans upload audio
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TextTranslationRequest'
+            examples:
+              ex:
+                value:
+                  text: "Hello everyone!"
+                  target_lang: fr
+      responses:
+        "200":
+          description: Texte traduit
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TextTranslationResponse'
+              examples:
+                ok:
+                  value:
+                    translation: "Bonjour à tous!"
+        "400":
+          description: Requête invalide (texte manquant)
+        "502":
+          description: Erreur renvoyée par le fournisseur de traduction
 components:
   securitySchemes:
     bearerAuth:
@@ -141,3 +170,23 @@ components:
           type: string
           enum: [opus, ogg, webm]
           example: opus
+    TextTranslationRequest:
+      type: object
+      required: [text]
+      properties:
+        text:
+          type: string
+          description: Texte à traduire
+          example: Hello everyone!
+        target_lang:
+          type: string
+          description: Code BCP-47 de la langue cible (par défaut fr)
+          example: fr
+    TextTranslationResponse:
+      type: object
+      required: [translation]
+      properties:
+        translation:
+          type: string
+          description: Résultat de la traduction
+          example: Bonjour à tous!

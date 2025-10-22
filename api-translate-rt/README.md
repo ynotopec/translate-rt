@@ -126,6 +126,46 @@ Use this endpoint to send discrete chunks recorded in the browser or uploaded fr
 
 The response streams an Opus audio payload suitable for immediate playback in the browser.
 
+### `POST /translate-text`
+
+* **Content type:** `application/json`
+* **Body:**
+
+```json
+{
+  "text": "Hello everyone!",
+  "target_lang": "fr"
+}
+```
+
+* **Response:**
+
+```json
+{
+  "translation": "Bonjour à tous!"
+}
+```
+
+Use this endpoint to translate plain text snippets without uploading audio. The `target_lang` field defaults to `fr` when
+omitted and should contain a BCP-47 language code supported by the translation provider.
+
+#### Python usage example
+
+```python
+import os
+import requests
+
+API_BASE = os.environ.get("TRANSLATE_RT_URL", "http://localhost:8080")
+payload = {"text": "How are you?", "target_lang": "es"}
+
+response = requests.post(f"{API_BASE}/translate-text", json=payload, timeout=30)
+response.raise_for_status()
+
+print(response.json()["translation"])
+```
+
+The snippet above posts a JSON payload to the backend and prints the translated text returned by the API.
+
 ## Related files
 
 * [`../frontend/static/js/code.js`](../frontend/static/js/code.js) – frontend logic that connects to `/upload` and `/tts-proxy`.
