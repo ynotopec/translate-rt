@@ -36,8 +36,9 @@ flowchart TD
     U --> UI --> Recorder --> VAD --> Chunker --> Network
     Network --> Upload
     Upload --> Network
-    Network --> TranslateText
-    TranslateText --> Network
+    Network -.-> TranslateText
+    TranslateText -.-> Network
+    %% Optional client integrations can call /translate-text directly.
     Network --> Renderer
     Renderer --> UI
     Renderer --> TTSQueue
@@ -106,11 +107,13 @@ Create `.env` files next to each service (see `frontend/.env.example`) to share 
 
 ## API documentation
 
-The backend exposes three REST endpoints consumed by the frontend:
+The backend exposes three REST endpoints. The shipped frontend calls `/upload` for speech translation and `/tts-proxy` for text-
+to-speech playback, while `/translate-text` remains available for auxiliary clients that need pure text translation:
 
 * **`POST /upload`** – accepts an audio chunk (`multipart/form-data`) together with `target_lang` and `primary_lang` form fields. Returns transcription, diarisation metadata and per-language translations. A concise summary is available in [`api-translate-rt/README.md`](api-translate-rt/README.md).
 * **`POST /tts-proxy`** – forwards text to the configured TTS provider and streams back Opus audio.
-* **`POST /translate-text`** – translates plain text snippets without uploading audio (used by the manual translation controls).
+* **`POST /translate-text`** – translates plain text snippets without uploading audio. This helper endpoint is available for
+  external clients; the bundled frontend currently relies solely on `/upload` responses for its translations.
 
 For an OpenAPI snapshot of the REST surface, refer to [`api-translate-rt/mini_OpenAPI.yaml`](api-translate-rt/mini_OpenAPI.yaml).
 
