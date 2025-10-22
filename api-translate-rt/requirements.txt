@@ -1,5 +1,15 @@
-fastapi
-uvicorn[standard]
-requests
-langdetect
-python-multipart
+# FastAPI + runtime
+fastapi>=0.110,<1.0
+uvicorn[standard]>=0.29,<1.0
+
+# I/O HTTP
+requests>=2.31,<3.0
+
+# Form-data / UploadFile
+python-multipart>=0.0.9
+
+# Détection de langue (optionnelle mais utilisée si dispo)
+langdetect>=1.0.9
+
+# Pydantic v2 (FastAPI l’emploie ; on verrouille pour éviter v3)
+pydantic>=2.6,<3.0
