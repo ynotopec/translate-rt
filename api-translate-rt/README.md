@@ -166,6 +166,16 @@ print(response.json()["translation"])
 
 The snippet above posts a JSON payload to the backend and prints the translated text returned by the API.
 
+#### cURL usage example
+
+```bash
+curl -X POST "${TRANSLATE_RT_URL:-http://localhost:8080}/translate-text" \
+  -H "Content-Type: application/json" \
+  -d '{"text": "How are you?", "target_lang": "es"}'
+```
+
+The command above sends a JSON body to the translation endpoint using environment variable `TRANSLATE_RT_URL` when defined (defaults to `http://localhost:8080`). The response contains the translated text as a JSON object.
+
 ## Related files
 
 * [`../frontend/static/js/code.js`](../frontend/static/js/code.js) – frontend logic that connects to `/upload` and `/tts-proxy`.
