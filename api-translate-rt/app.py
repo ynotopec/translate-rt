@@ -8,6 +8,7 @@ import requests
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Body
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
+from pydantic import BaseModel, Field
 
 # ────────────────────────────── Config & logging ──────────────────────────────
 log = logging.getLogger(__name__).info
@@ -155,6 +156,15 @@ def build_translations(txt: str, detected: str, primary: str, target: str) -> Di
             out[f'translation_{lg}'] = txt
     return out
 
+
+class TextTranslationRequest(BaseModel):
+    text: str = Field(..., description='Text to translate')
+    target_lang: str = Field('fr', description='BCP-47 code of the desired translation language')
+
+
+class TextTranslationResponse(BaseModel):
+    translation: str = Field(..., description='Translated text')
+
 # ────────────────────────────── FastAPI app ──────────────────────────────
 app = FastAPI()
 app.add_middleware(
@@ -169,6 +179,21 @@ app.add_middleware(
 def tts_proxy(payload: Dict[str, Any] = Body(...)):
     r = post(Cfg.TTS_URL, headers={'Authorization': f'Bearer {Cfg.TTS_API_KEY}','Content-Type':'application/json'}, json=payload)
     return Response(content=r.content, status_code=r.status_code, media_type=r.headers.get('Content-Type','audio/webm'))
+
+
+@app.post('/translate-text', response_model=TextTranslationResponse)
+def translate_text_endpoint(payload: TextTranslationRequest):
+    text = (payload.text or '').strip()
+    if not text:
+        raise HTTPException(status_code=400, detail='Text must not be empty')
+
+    try:
+        translation = translate_text(text, payload.target_lang)
+    except Exception as exc:
+        log(f'[TRANSLATE TEXT ERROR] {exc}')
+        raise HTTPException(status_code=502, detail='Translation provider error') from exc
+
+    return TextTranslationResponse(translation=translation)
 
 
 @app.post('/upload')
