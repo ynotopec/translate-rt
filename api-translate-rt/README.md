@@ -55,7 +55,7 @@ flowchart LR
 
 ## Environment configuration
 
-Populate the environment variables described below before launching `app.py`. The root project contains a [.env.example](../.env.example) file that can be copied to `.env` and customised for local runs.
+Populate the environment variables described below before launching `app.py`. The shared sample configuration lives in [`../frontend/.env.example`](../frontend/.env.example); copy it to `api-translate-rt/.env` and customise the values for your deployment.
 
 | Variable | Required | Description |
 | --- | --- | --- |
