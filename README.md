@@ -48,6 +48,39 @@ flowchart TD
 
 The diagram highlights how the Flask-served single-page app orchestrates browser APIs. `MediaRecorder` captures Opus audio frames, the custom voice activity detector segments speech before uploading chunks to the REST backend, and responses update the renderer. When text-to-speech is enabled, translations are queued for playback by calling the `/tts-proxy` endpoint and playing the returned Opus audio in the browser.
 
+## Real-time streaming sequence
+
+The sequence diagram below illustrates how the browser, backend and external providers collaborate while processing an audio chunk and optionally requesting text-to-speech playback.
+
+```mermaid
+sequenceDiagram
+    participant User as Speaker
+    participant Browser as Browser UI
+    participant API as FastAPI backend
+    participant Whisper as Whisper STT
+    participant GPT as Translation model
+    participant TTS as TTS provider
+
+    User->>Browser: Speak into microphone
+    Browser->>Browser: Capture Opus chunk<br/>via MediaRecorder
+    Browser->>API: POST /upload (chunk, metadata)
+    API->>Whisper: Transcribe audio chunk
+    Whisper-->>API: Transcript + timing
+    API->>GPT: Request translations
+    GPT-->>API: Translated text
+    API-->>Browser: JSON (transcript + translations)
+    Browser->>Browser: Render transcript & translation
+    alt Text-to-speech enabled
+        Browser->>API: POST /tts-proxy (text)
+        API->>TTS: Forward TTS request
+        TTS-->>API: Stream Opus audio
+        API-->>Browser: Audio response stream
+        Browser->>User: Playback translated audio
+    end
+```
+
+For a standalone version that you can embed elsewhere, see [`docs/streaming-sequence.md`](docs/streaming-sequence.md).
+
 ## Prerequisites
 
 * Python 3.10 or newer.
