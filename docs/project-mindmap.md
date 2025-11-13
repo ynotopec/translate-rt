@@ -25,15 +25,15 @@ mindmap
         "Helpers"
           "Error banners"
           "JSON export"
-    "FastAPI backend"
+    FastAPI
       "api-translate-rt/app.py"
-      "Services"
+      Services
         "Environment-driven Cfg"
         "requests Session pooling"
         "Whisper transcription proxy"
         "Optional diarisation"
         "LRU-cached translations"
-      "Endpoints"
+      Endpoints
         "/upload"
           "Validate chunk size"
           "Invoke diarisation + Whisper"
@@ -42,10 +42,10 @@ mindmap
           "Assemble translations"
         "/translate-text"
           "Pydantic request/response"
-          "Reuse translate_text()"
+          "Dedicated translate_text helper"
         "/tts-proxy"
           "Relay JSON payload to TTS"
-      "Entrypoint"
+      Entrypoint
         "uvicorn runner"
     "Realtime WebSocket API"
       "api-realtime-ai-futur/app.py"
