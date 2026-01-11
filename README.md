@@ -10,6 +10,7 @@ Real-time speech translation prototype built with a lightweight Flask frontend a
 | `frontend/static/` | Frontend assets (HTML, JavaScript and styles) implementing recording, diarisation display and TTS playback. |
 | `frontend/run.sh` | Helper script that creates a virtual environment, loads environment variables from `.env` and launches the Flask app. |
 | `api-translate-rt/` | Standalone FastAPI backend providing `/upload`, `/tts-proxy` and `/translate-text` endpoints. |
+| `api-realtime-ai-futur/` | FastAPI WebSocket service that provides a `/v1/realtime` endpoint for low-latency speech translation with optional streaming TTS. |
 | `api-translate-rt/mini_OpenAPI.yaml` | Compact OpenAPI description of the public HTTP endpoints exposed by the API. |
 
 ## Frontend architecture diagram
@@ -149,6 +150,14 @@ to-speech playback, while `/translate-text` remains available for auxiliary clie
   external clients; the bundled frontend currently relies solely on `/upload` responses for its translations.
 
 For an OpenAPI snapshot of the REST surface, refer to [`api-translate-rt/mini_OpenAPI.yaml`](api-translate-rt/mini_OpenAPI.yaml).
+
+## Realtime WebSocket service
+
+The `api-realtime-ai-futur` package hosts a FastAPI WebSocket endpoint at `/v1/realtime`. It speaks an OpenAI-style realtime
+protocol with messages such as `session.created`, `response.output_text.delta`, and optional `response.audio.delta` streams,
+making it suitable for low-latency conversational translation or voice assistants. Configure it with the same `AUDIO_API_KEY`
+and `OPENAI_API_KEY` values used by the REST backend, plus optional VAD-related environment variables exposed in
+`api-realtime-ai-futur/app.py`.
 
 ## Development tips
 
