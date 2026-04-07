@@ -1,106 +1,250 @@
 # /home/ailab/api-translate-rt/app.py
-import os, json, re, logging
+import json
+import logging
+import os
+import re
 from functools import lru_cache
-from typing import Dict, Any
 from io import BytesIO
+from typing import Any, Dict, Optional
 
 import requests
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Body
+from fastapi import Body, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field
 
-# ────────────────────────────── Config & logging ──────────────────────────────
-log = logging.getLogger(__name__).info
-logging.basicConfig(level=logging.INFO, format='[%(levelname)s] %(asctime)s – %(message)s')
+# ────────────────────────────── Logging ──────────────────────────────
+logging.basicConfig(
+    level=logging.INFO,
+    format='[%(levelname)s] %(asctime)s - %(name)s - %(message)s',
+)
+logger = logging.getLogger(__name__)
+
+# ────────────────────────────── Helpers ──────────────────────────────
+def _env_bool(name: str, default: bool = False) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {'1', 'true', 'yes', 'on'}
+
 
 def _summarize_payload(payload: Any, *, limit: int = 200) -> str:
     try:
-        if payload is None: return 'None'
-        if isinstance(payload, (str, bytes)):
-            if isinstance(payload, bytes): payload = payload.decode('utf-8', errors='replace')
+        if payload is None:
+            return 'None'
+        if isinstance(payload, bytes):
+            decoded = payload.decode('utf-8', errors='replace')
+            return decoded if len(decoded) <= limit else decoded[:limit] + '…'
+        if isinstance(payload, str):
             return payload if len(payload) <= limit else payload[:limit] + '…'
-        if isinstance(payload, (int, float, bool)): return repr(payload)
+        if isinstance(payload, (int, float, bool)):
+            return repr(payload)
         if isinstance(payload, dict):
-            j = json.dumps(payload, default=str)
-            return j if len(j) <= limit else j[:limit] + '…'
+            data = json.dumps(payload, default=str, ensure_ascii=False)
+            return data if len(data) <= limit else data[:limit] + '…'
         if isinstance(payload, (list, tuple, set)):
-            j = json.dumps(list(payload), default=str)
-            return j if len(j) <= limit else j[:limit] + '…'
-        return repr(payload)[:limit] + ('…' if len(repr(payload)) > limit else '')
+            data = json.dumps(list(payload), default=str, ensure_ascii=False)
+            return data if len(data) <= limit else data[:limit] + '…'
+        data = repr(payload)
+        return data if len(data) <= limit else data[:limit] + '…'
     except Exception as exc:
         return f'<unserializable payload: {exc}>'
 
-class Cfg:
-    AUDIO_API_KEY   = os.getenv('AUDIO_API_KEY')
-    OPENAI_API_KEY  = os.getenv('OPENAI_API_KEY')
-    OPENAI_API_BASE = os.getenv('OPENAI_API_BASE', '')
-    OPENAI_MODEL    = os.getenv('OPENAI_API_MODEL', 'gpt-oss')
-    WHISPER_URL     = os.getenv('WHISPER_URL', 'https://api-audio2txt.cloud-pi-native.com/v1/audio/transcriptions')
-    DIAR_URL        = os.getenv('DIAR_URL', 'https://api-diarization.cloud-pi-native.com/upload-audio/')
-    DIAR_TOKEN      = os.getenv('DIARIZATION_TOKEN')
-    TTS_API_KEY     = os.getenv('TTS_API_KEY')
-    TTS_URL         = os.getenv('TTS_API_URL', 'https://api-txt2audio.cloud-pi-native.com/v1/audio/speech')
-    REQUEST_TIMEOUT = int(os.getenv('REQUEST_TIMEOUT', '30'))
-    MAX_CACHE_SIZE  = int(os.getenv('MAX_CACHE_SIZE', '256'))
 
-for v in ('AUDIO_API_KEY', 'OPENAI_API_KEY'):
-    if not getattr(Cfg, v):
-        raise RuntimeError(f'Missing mandatory env variable : {v}')
+def _sanitize_lang(value: Optional[str], default: str = 'fr') -> str:
+    lang = (value or default).strip().lower()
+    return lang or default
 
-session = requests.Session()
-session.mount('http://', requests.adapters.HTTPAdapter(pool_connections=20, pool_maxsize=20, max_retries=2))
-session.mount('https://', requests.adapters.HTTPAdapter(pool_connections=20, pool_maxsize=20, max_retries=2))
 
-def post(url: str, **kw) -> requests.Response:
-    kw.setdefault('timeout', Cfg.REQUEST_TIMEOUT)
-    payload_preview = {}
-    for key in ('json', 'data'):
-        if key in kw and kw[key] is not None:
-            payload_preview[key] = _summarize_payload(kw[key])
-    if 'files' in kw:
-        payload_preview['files'] = list(kw['files'].keys())
-    log(f"[IO][HTTP][OUTBOUND] POST {url} opts={{'timeout': {kw.get('timeout')}}} payload={payload_preview}")
-    r = session.post(url, **kw)
-    log(f"[IO][HTTP][OUTBOUND][RESPONSE] url={url} status={r.status_code} length={len(r.content)}")
-    r.raise_for_status()
-    return r
+def _normalize_text(value: str) -> str:
+    return re.sub(r'\s+', ' ', (value or '')).strip()
 
-# ────────────────────────────── Helpers ──────────────────────────────
-FILTER = {s.lower() for s in ('thank you.',)}
-LANG_NAME = {'fr':'French','en':'English','ro':'Romanian','bg':'Bulgarian','es':'Spanish','de':'German','it':'Italian','pt':'Brazilian Portuguese','ru':'Russian','zh-cn':'Simplified Chinese','zh-tw':'Traditional Chinese'}
 
-def tiny_chunk(data: bytes) -> bool:
+def _is_small_audio(data: bytes) -> bool:
     return len(data) < 16_000
 
 
-def call_whisper(filename: str, data: bytes) -> Dict[str, Any]:
-    files = {'file': (filename, BytesIO(data), 'audio/webm'), 'model': (None, 'whisper-1')}
-    return post(Cfg.WHISPER_URL, headers={'Authorization': f'Bearer {Cfg.AUDIO_API_KEY}'}, files=files).json()
+def _guess_content_type(upload: UploadFile, filename: str) -> str:
+    if upload.content_type:
+        return upload.content_type
+    lower = filename.lower()
+    if lower.endswith('.webm'):
+        return 'audio/webm'
+    if lower.endswith('.ogg') or lower.endswith('.oga'):
+        return 'audio/ogg'
+    if lower.endswith('.wav'):
+        return 'audio/wav'
+    if lower.endswith('.mp3'):
+        return 'audio/mpeg'
+    if lower.endswith('.m4a'):
+        return 'audio/mp4'
+    if lower.endswith('.flac'):
+        return 'audio/flac'
+    return 'application/octet-stream'
 
 
-def call_diarization(filename: str, data: bytes, target_lang: str) -> Dict[str, Any]:
-    if not Cfg.DIAR_TOKEN: return {}
-    files = {'file': (filename, BytesIO(data), 'audio/webm'), 'target_lang': (None, target_lang)}
+def _safe_json(response: requests.Response) -> Dict[str, Any]:
     try:
-        return post(Cfg.DIAR_URL, headers={'Authorization': f'Bearer {Cfg.DIAR_TOKEN}'}, files=files).json()
-    except Exception as e:
-        log(f'[DIARIZATION ERROR] {e}')
-        return {}
+        return response.json()
+    except Exception as exc:
+        logger.error('Invalid JSON response from upstream: %s', exc)
+        raise HTTPException(status_code=502, detail='Invalid JSON response from upstream') from exc
+
+
+# ────────────────────────────── Config ──────────────────────────────
+class Cfg:
+    AUDIO_API_KEY = os.getenv('AUDIO_API_KEY')
+    OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
+    OPENAI_API_BASE = os.getenv('OPENAI_API_BASE', '').rstrip('/')
+    OPENAI_MODEL = os.getenv('OPENAI_API_MODEL', 'gpt-oss')
+
+    WHISPER_URL = os.getenv(
+        'WHISPER_URL',
+        'https://api-audio2txt.ai-dev.numerique-interieur.com/v1/audio/transcriptions',
+    )
+    STT_MODEL = os.getenv('STT_MODEL', 'whisper-1')
+
+    DIAR_URL = os.getenv(
+        'DIAR_URL',
+        'https://api-diarization.ai-dev.numerique-interieur.com/upload-audio/',
+    )
+    DIAR_TOKEN = os.getenv('DIARIZATION_TOKEN')
+
+    TTS_API_KEY = os.getenv('TTS_API_KEY')
+    TTS_URL = os.getenv(
+        'TTS_API_URL',
+        'https://api-txt2audio.ai-dev.numerique-interieur.com/v1/audio/speech',
+    )
+
+    REQUEST_TIMEOUT = int(os.getenv('REQUEST_TIMEOUT', '30'))
+    MAX_CACHE_SIZE = int(os.getenv('MAX_CACHE_SIZE', '256'))
+
+    CORS_ALLOW_CREDENTIALS = _env_bool('CORS_ALLOW_CREDENTIALS', False)
+    CORS_ALLOW_ORIGINS = [
+        origin.strip()
+        for origin in os.getenv('CORS_ALLOW_ORIGINS', '*').split(',')
+        if origin.strip()
+    ]
+
+
+missing_env = []
+if not Cfg.AUDIO_API_KEY:
+    missing_env.append('AUDIO_API_KEY')
+if not Cfg.OPENAI_API_KEY:
+    missing_env.append('OPENAI_API_KEY')
+if not Cfg.OPENAI_API_BASE:
+    missing_env.append('OPENAI_API_BASE')
+
+if missing_env:
+    raise RuntimeError(f"Missing mandatory env variable(s): {', '.join(missing_env)}")
+
+if Cfg.CORS_ALLOW_CREDENTIALS and '*' in Cfg.CORS_ALLOW_ORIGINS:
+    raise RuntimeError(
+        'Invalid CORS configuration: CORS_ALLOW_CREDENTIALS=true cannot be used with CORS_ALLOW_ORIGINS=*'
+    )
+
+# ────────────────────────────── HTTP session ──────────────────────────────
+session = requests.Session()
+adapter = requests.adapters.HTTPAdapter(
+    pool_connections=20,
+    pool_maxsize=20,
+    max_retries=2,
+)
+session.mount('http://', adapter)
+session.mount('https://', adapter)
+
+
+def post(url: str, **kwargs: Any) -> requests.Response:
+    kwargs.setdefault('timeout', Cfg.REQUEST_TIMEOUT)
+
+    payload_preview: Dict[str, Any] = {}
+    for key in ('json', 'data'):
+        if key in kwargs and kwargs[key] is not None:
+            payload_preview[key] = _summarize_payload(kwargs[key])
+
+    if 'files' in kwargs and kwargs['files'] is not None:
+        payload_preview['files'] = list(kwargs['files'].keys())
+
+    logger.info(
+        "[IO][HTTP][OUTBOUND] POST %s opts=%s payload=%s",
+        url,
+        {'timeout': kwargs.get('timeout')},
+        payload_preview,
+    )
+
+    try:
+        response = session.post(url, **kwargs)
+        logger.info(
+            "[IO][HTTP][OUTBOUND][RESPONSE] url=%s status=%s length=%s",
+            url,
+            response.status_code,
+            len(response.content),
+        )
+        return response
+    except requests.RequestException as exc:
+        logger.exception('HTTP request failed for %s', url)
+        raise HTTPException(status_code=502, detail='Upstream request failed') from exc
+
+
+def raise_for_upstream(response: requests.Response, provider_name: str) -> None:
+    if response.ok:
+        return
+
+    detail = None
+    try:
+        payload = response.json()
+        detail = payload.get('detail') if isinstance(payload, dict) else payload
+    except Exception:
+        detail = response.text[:500] if response.text else None
+
+    logger.error(
+        '[%s ERROR] status=%s detail=%s',
+        provider_name,
+        response.status_code,
+        _summarize_payload(detail),
+    )
+
+    raise HTTPException(
+        status_code=502,
+        detail=f'{provider_name} provider error',
+    )
+
+
+# ────────────────────────────── Translation helpers ──────────────────────────────
+FILTER_NORMALIZED = {
+    _normalize_text(value).lower()
+    for value in (
+        'thank you.',
+        'thank you',
+    )
+}
+
+LANG_NAME = {
+    'fr': 'French',
+    'en': 'English',
+    'ro': 'Romanian',
+    'bg': 'Bulgarian',
+    'es': 'Spanish',
+    'de': 'German',
+    'it': 'Italian',
+    'pt': 'Portuguese',
+    'pt-br': 'Brazilian Portuguese',
+    'pt-pt': 'European Portuguese',
+    'ru': 'Russian',
+    'zh-cn': 'Simplified Chinese',
+    'zh-tw': 'Traditional Chinese',
+}
 
 
 def _looks_like_noise(text: str, whisper_payload: Dict[str, Any]) -> bool:
-    """Heuristic to detect transcripts produced from silence or background noise."""
-
     def _is_short_phrase(value: str) -> bool:
         words = value.split()
         return len(value) <= 3 or (len(value) <= 7 and len(words) <= 2)
 
-    cleaned = re.sub(r"\s+", " ", text or "").strip()
+    cleaned = _normalize_text(text)
     if not cleaned:
         return True
 
-    # Punctuation-only snippets ("." or "…") are almost always silence artefacts.
     if not any(ch.isalnum() for ch in cleaned):
         return True
 
@@ -132,31 +276,115 @@ def _looks_like_noise(text: str, whisper_payload: Dict[str, Any]) -> bool:
 
     return False
 
+
 @lru_cache(maxsize=Cfg.MAX_CACHE_SIZE)
-def translate_text(text: str, lang: str) -> str:
+def translate_text_cached(text: str, lang: str) -> str:
+    lang = _sanitize_lang(lang)
     lang_prompt = LANG_NAME.get(lang, lang)
-    data = {
+
+    payload = {
         'model': Cfg.OPENAI_MODEL,
         'messages': [
-            {'role':'system','content':'You are a professional translator. Translate accurately and naturally.'},
-            {'role':'user','content':f'Translate the text into {lang_prompt}. Return ONLY the translation.\n\n{text}'}
+            {
+                'role': 'system',
+                'content': 'You are a professional translator. Translate accurately and naturally.',
+            },
+            {
+                'role': 'user',
+                'content': f'Translate the text into {lang_prompt}. Return ONLY the translation.\n\n{text}',
+            },
         ],
-        'temperature': 0
+        'temperature': 0,
     }
-    out = post(f"{Cfg.OPENAI_API_BASE}/chat/completions", headers={'Authorization': f'Bearer {Cfg.OPENAI_API_KEY}'}, json=data).json()['choices'][0]['message']['content']
-    return re.sub(r'\s+', ' ', out).strip()
 
-def build_translations(txt: str, detected: str, primary: str, target: str) -> Dict[str, str]:
-    out = {}
-    for lg in {primary, target} - {detected}:
-        try:
-            out[f'translation_{lg}'] = translate_text(txt, lg)
-        except Exception as e:
-            log(f'[TRANSLATION ERROR target={lg}] {e}')
-            out[f'translation_{lg}'] = txt
-    return out
+    response = post(
+        f'{Cfg.OPENAI_API_BASE}/chat/completions',
+        headers={
+            'Authorization': f'Bearer {Cfg.OPENAI_API_KEY}',
+            'Content-Type': 'application/json',
+        },
+        json=payload,
+    )
+    raise_for_upstream(response, 'Translation')
+
+    data = _safe_json(response)
+    try:
+        content = data['choices'][0]['message']['content']
+    except (KeyError, IndexError, TypeError) as exc:
+        logger.error('Unexpected translation response format: %s', _summarize_payload(data))
+        raise HTTPException(status_code=502, detail='Invalid translation response format') from exc
+
+    return _normalize_text(content)
 
 
+def build_translations(text: str, detected_lang: str, primary_lang: str, target_lang: str) -> Dict[str, str]:
+    result: Dict[str, str] = {}
+    detected_lang = _sanitize_lang(detected_lang, '')
+    primary_lang = _sanitize_lang(primary_lang)
+    target_lang = _sanitize_lang(target_lang)
+
+    for lang in {primary_lang, target_lang}:
+        if lang and lang != detected_lang:
+            try:
+                result[f'translation_{lang}'] = translate_text_cached(text, lang)
+            except HTTPException:
+                raise
+            except Exception:
+                logger.exception('[TRANSLATION ERROR target=%s]', lang)
+                result[f'translation_{lang}'] = text
+
+    return result
+
+
+# ────────────────────────────── STT / diarization ──────────────────────────────
+def call_whisper(filename: str, content_type: str, data: bytes) -> Dict[str, Any]:
+    files = {
+        'file': (filename, BytesIO(data), content_type),
+        'model': (None, Cfg.STT_MODEL),
+    }
+    response = post(
+        Cfg.WHISPER_URL,
+        headers={'Authorization': f'Bearer {Cfg.AUDIO_API_KEY}'},
+        files=files,
+    )
+    raise_for_upstream(response, 'Whisper')
+    return _safe_json(response)
+
+
+def call_diarization(filename: str, content_type: str, data: bytes, target_lang: str) -> Dict[str, Any]:
+    if not Cfg.DIAR_TOKEN:
+        return {}
+
+    files = {
+        'file': (filename, BytesIO(data), content_type),
+        'target_lang': (None, target_lang),
+    }
+
+    try:
+        response = post(
+            Cfg.DIAR_URL,
+            headers={'Authorization': f'Bearer {Cfg.DIAR_TOKEN}'},
+            files=files,
+        )
+        raise_for_upstream(response, 'Diarization')
+        return _safe_json(response)
+    except HTTPException:
+        logger.exception('[DIARIZATION ERROR]')
+        return {}
+    except Exception:
+        logger.exception('[DIARIZATION ERROR]')
+        return {}
+
+
+def detect_language(text: str) -> str:
+    try:
+        from langdetect import detect
+        return _sanitize_lang(detect(text), '')
+    except Exception:
+        return ''
+
+
+# ────────────────────────────── API models ──────────────────────────────
 class TextTranslationRequest(BaseModel):
     text: str = Field(..., description='Text to translate')
     target_lang: str = Field('fr', description='BCP-47 code of the desired translation language')
@@ -165,32 +393,83 @@ class TextTranslationRequest(BaseModel):
 class TextTranslationResponse(BaseModel):
     translation: str = Field(..., description='Translated text')
 
+
+class UploadResponse(BaseModel):
+    transcription: str = Field('', description='Transcribed text')
+    detected_lang: str = Field('', description='Detected language')
+    diarization: Dict[str, Any] = Field(default_factory=dict, description='Diarization payload')
+
+
 # ────────────────────────────── FastAPI app ──────────────────────────────
 app = FastAPI()
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=Cfg.CORS_ALLOW_ORIGINS,
+    allow_credentials=Cfg.CORS_ALLOW_CREDENTIALS,
+    allow_methods=['*'],
+    allow_headers=['*'],
 )
 
+
+@app.get('/healthz')
+def healthz() -> Dict[str, str]:
+    return {'status': 'ok'}
+
+
 @app.post('/tts-proxy')
-def tts_proxy(payload: Dict[str, Any] = Body(...)):
-    r = post(Cfg.TTS_URL, headers={'Authorization': f'Bearer {Cfg.TTS_API_KEY}','Content-Type':'application/json'}, json=payload)
-    return Response(content=r.content, status_code=r.status_code, media_type=r.headers.get('Content-Type','audio/webm'))
+def tts_proxy(payload: Dict[str, Any] = Body(...)) -> Response:
+    if not Cfg.TTS_API_KEY:
+        raise HTTPException(status_code=503, detail='TTS is not configured')
+
+    response = post(
+        Cfg.TTS_URL,
+        headers={
+            'Authorization': f'Bearer {Cfg.TTS_API_KEY}',
+            'Content-Type': 'application/json',
+        },
+        json=payload,
+    )
+
+    if not response.ok:
+        detail = None
+        try:
+            detail = response.json()
+        except Exception:
+            detail = response.text[:500] if response.text else None
+
+        logger.error(
+            '[TTS ERROR] status=%s detail=%s',
+            response.status_code,
+            _summarize_payload(detail),
+        )
+
+        return JSONResponse(
+            status_code=502,
+            content={'detail': 'TTS provider error'},
+        )
+
+    return Response(
+        content=response.content,
+        status_code=response.status_code,
+        media_type=response.headers.get('Content-Type', 'audio/webm'),
+    )
 
 
 @app.post('/translate-text', response_model=TextTranslationResponse)
-def translate_text_endpoint(payload: TextTranslationRequest):
-    text = (payload.text or '').strip()
+def translate_text_endpoint(payload: TextTranslationRequest) -> TextTranslationResponse:
+    text = _normalize_text(payload.text)
     if not text:
         raise HTTPException(status_code=400, detail='Text must not be empty')
 
+    target_lang = _sanitize_lang(payload.target_lang)
+
     try:
-        translation = translate_text(text, payload.target_lang)
+        translation = translate_text_cached(text, target_lang)
+    except HTTPException:
+        raise
     except Exception as exc:
-        log(f'[TRANSLATE TEXT ERROR] {exc}')
+        logger.exception('[TRANSLATE TEXT ERROR]')
         raise HTTPException(status_code=502, detail='Translation provider error') from exc
 
     return TextTranslationResponse(translation=translation)
@@ -201,52 +480,74 @@ async def upload(
     file: UploadFile = File(...),
     target_lang: str = Form('fr'),
     primary_lang: str = Form('fr'),
-):
+) -> Dict[str, Any]:
     if not file:
         raise HTTPException(status_code=400, detail='No file provided')
 
-    contents = await file.read()
+    target_lang = _sanitize_lang(target_lang)
+    primary_lang = _sanitize_lang(primary_lang)
 
-    if tiny_chunk(contents):
-        await file.close()
-        return {'text': ''}
-
-    diar = call_diarization(file.filename, contents, target_lang)
-    whisper_payload = {}
-    try:
-        whisper_payload = call_whisper(file.filename, contents) or {}
-        text = whisper_payload.get('text', '').strip()
-    except Exception as e:
-        log(f'[WHISPER ERROR] {e}')
-        text = ''
-
-    if text and _looks_like_noise(text, whisper_payload):
-        log(f"[WHISPER] filtered probable noise transcript: {text!r}")
-        text = ''
-
-    if not text or text.lower() in FILTER:
-        await file.close()
-        return {'text': '', 'diarization': diar}
+    filename = file.filename or 'audio.bin'
+    content_type = _guess_content_type(file, filename)
 
     try:
-        from langdetect import detect
+        contents = await file.read()
+    finally:
+        await file.close()
 
-        detected = detect(text)
+    if not contents:
+        raise HTTPException(status_code=400, detail='Uploaded file is empty')
+
+    if _is_small_audio(contents):
+        return {
+            'transcription': '',
+            'detected_lang': '',
+            'diarization': {},
+        }
+
+    diarization = call_diarization(filename, content_type, contents, target_lang)
+
+    whisper_payload: Dict[str, Any] = {}
+    transcription = ''
+
+    try:
+        whisper_payload = call_whisper(filename, content_type, contents) or {}
+        transcription = _normalize_text(whisper_payload.get('text', ''))
+    except HTTPException:
+        raise
     except Exception:
-        detected = ''
+        logger.exception('[WHISPER ERROR]')
+        transcription = ''
 
-    res = {'detected_lang': detected, 'transcription': text, 'diarization': diar}
-    res.update(build_translations(text, detected, primary_lang, target_lang))
+    if transcription and _looks_like_noise(transcription, whisper_payload):
+        logger.info("[WHISPER] filtered probable noise transcript: %r", transcription)
+        transcription = ''
 
-    await file.close()
-    return res
+    if not transcription or transcription.lower() in FILTER_NORMALIZED:
+        return {
+            'transcription': '',
+            'detected_lang': '',
+            'diarization': diarization,
+        }
+
+    detected_lang = detect_language(transcription)
+
+    response: Dict[str, Any] = {
+        'transcription': transcription,
+        'detected_lang': detected_lang,
+        'diarization': diarization,
+    }
+
+    response.update(build_translations(transcription, detected_lang, primary_lang, target_lang))
+    return response
 
 
 # ────────────────────────────── Entrypoint ──────────────────────────────
 if __name__ == '__main__':
     import uvicorn
 
-    port = int(os.getenv('SERVER_PORT', 8080))
+    port = int(os.getenv('SERVER_PORT', '8080'))
     host = os.getenv('SERVER_NAME', '0.0.0.0')
-    log(f"[BOOT] FastAPI server listening on {host}:{port}")
+
+    logger.info('[BOOT] FastAPI server listening on %s:%s', host, port)
     uvicorn.run('app:app', host=host, port=port, log_level='info')
