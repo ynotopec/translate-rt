@@ -6,6 +6,7 @@ import re
 from functools import lru_cache
 from io import BytesIO
 from typing import Any, Dict, Optional
+from urllib.parse import urlsplit
 
 import requests
 from fastapi import Body, FastAPI, File, Form, HTTPException, UploadFile
@@ -125,6 +126,42 @@ class Cfg:
         for origin in os.getenv('CORS_ALLOW_ORIGINS', '*').split(',')
         if origin.strip()
     ]
+    CORS_ALLOW_ORIGIN_REGEX = os.getenv('CORS_ALLOW_ORIGIN_REGEX', '').strip() or None
+
+
+def _build_origin_regex_from_origin(origin: str) -> Optional[str]:
+    parsed = urlsplit(origin)
+    if parsed.scheme not in {'http', 'https'}:
+        return None
+
+    host = parsed.hostname or ''
+    if not host.startswith('.'):
+        return None
+
+    root_domain = re.escape(host[1:])
+    port_pattern = rf':{parsed.port}' if parsed.port is not None else r'(?::\d+)?'
+    return rf'^{parsed.scheme}://(?:[a-zA-Z0-9-]+\.)*{root_domain}{port_pattern}$'
+
+
+def _resolve_cors_config() -> tuple[list[str], Optional[str]]:
+    explicit_origins: list[str] = []
+    regex_patterns: list[str] = []
+
+    if Cfg.CORS_ALLOW_ORIGIN_REGEX:
+        regex_patterns.append(Cfg.CORS_ALLOW_ORIGIN_REGEX)
+
+    for origin in Cfg.CORS_ALLOW_ORIGINS:
+        generated_regex = _build_origin_regex_from_origin(origin)
+        if generated_regex:
+            regex_patterns.append(generated_regex)
+        else:
+            explicit_origins.append(origin)
+
+    allow_origin_regex = '|'.join(f'(?:{pattern})' for pattern in regex_patterns) or None
+    return explicit_origins, allow_origin_regex
+
+
+ALLOW_ORIGINS, ALLOW_ORIGIN_REGEX = _resolve_cors_config()
 
 
 missing_env = []
@@ -138,7 +175,7 @@ if not Cfg.OPENAI_API_BASE:
 if missing_env:
     raise RuntimeError(f"Missing mandatory env variable(s): {', '.join(missing_env)}")
 
-if Cfg.CORS_ALLOW_CREDENTIALS and '*' in Cfg.CORS_ALLOW_ORIGINS:
+if Cfg.CORS_ALLOW_CREDENTIALS and ('*' in ALLOW_ORIGINS or ALLOW_ORIGIN_REGEX == '.*'):
     raise RuntimeError(
         'Invalid CORS configuration: CORS_ALLOW_CREDENTIALS=true cannot be used with CORS_ALLOW_ORIGINS=*'
     )
@@ -405,7 +442,8 @@ app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=Cfg.CORS_ALLOW_ORIGINS,
+    allow_origins=ALLOW_ORIGINS,
+    allow_origin_regex=ALLOW_ORIGIN_REGEX,
     allow_credentials=Cfg.CORS_ALLOW_CREDENTIALS,
     allow_methods=['*'],
     allow_headers=['*'],
