@@ -734,6 +734,8 @@
   // =========================
   const UI = {
     init() {
+      UI._syncPrimaryLanguageOptions();
+
       DOM.primaryLangChips.forEach(chip => chip.addEventListener('click', () => {
         if (!DOM.primaryLangSelect) return;
         DOM.primaryLangSelect.value = chip.dataset.lang;
@@ -788,6 +790,19 @@
       DOM.saveLogButton?.addEventListener('click', () => {
         downloadJSON(State.fullTranscriptionLog, 'transcription');
       });
+    },
+
+    _syncPrimaryLanguageOptions() {
+      if (!DOM.primaryLangSelect || !DOM.langSelect) return;
+      const currentPrimary = DOM.primaryLangSelect.value || 'fr';
+
+      DOM.primaryLangSelect.innerHTML = DOM.langSelect.innerHTML;
+
+      if ([...DOM.primaryLangSelect.options].some(o => o.value === currentPrimary)) {
+        DOM.primaryLangSelect.value = currentPrimary;
+      } else {
+        DOM.primaryLangSelect.value = 'fr';
+      }
     },
 
     _highlightPrimaryChip() {
