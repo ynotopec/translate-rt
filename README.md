@@ -1,166 +1,83 @@
 # translate-rt
 
-Real-time speech translation prototype built with a lightweight Flask frontend and a FastAPI companion service that performs transcription, translation, diarisation and optional text-to-speech playback. The project is designed around rapid experimentation for live events: the web UI captures audio in the browser, streams it to the API and displays both the transcript and the translated text with speaker labels.
+Minimal real-time translation stack:
 
-## Repository layout
+* a Flask frontend served by `app.py`;
+* a FastAPI backend in `api-translate-rt/` for transcription, translation, diarization, and TTS proxying;
+* idempotent `uv` install/run scripts that use `~/venv/<basename project dir>`.
 
-| Path | Description |
-| --- | --- |
-| `frontend/app.py` | Minimal Flask application that serves the static single-page UI from `frontend/static/`. |
-| `frontend/static/` | Frontend assets (HTML, JavaScript and styles) implementing recording, diarisation display and TTS playback. |
-| `frontend/run.sh` | Helper script that creates a virtual environment, loads environment variables from `.env` and launches the Flask app. |
-| `api-translate-rt/` | Standalone FastAPI backend providing `/upload`, `/tts-proxy` and `/translate-text` endpoints. |
-| `api-realtime-ai-futur/` | FastAPI WebSocket service that provides a `/v1/realtime` endpoint for low-latency speech translation with optional streaming TTS. |
-| `api-translate-rt/mini_OpenAPI.yaml` | Compact OpenAPI description of the public HTTP endpoints exposed by the API. |
+## Requirements
 
-## Frontend architecture diagram
+* Python 3.10+
+* `uv` (installed automatically by `install.sh` when missing)
+* `ffmpeg` on `PATH` for audio conversion/provider compatibility
+* API tokens configured in `.env`
 
-```mermaid
-flowchart TD
-    subgraph Browser["Browser\n(frontend/static/html/index.html\n+ static/js/code.js)"]
-        U["User actions\nrecord/stop buttons,\nlanguage selectors"]
-        UI["DOM binding & DSFR layout"]
-        Recorder["Recorder module\n(MediaRecorder + getUserMedia)"]
-        VAD["Custom VAD loop\nand speech detection"]
-        Chunker["Audio chunk buffer\nState.audioChunks"]
-        Network["Network helpers\nfetch + TTS proxy"]
-        Renderer["UI renderer\ntranscript & translation"]
-        TTSQueue["TTS playback queue"]
-    end
-
-    subgraph API["api-translate-rt service"]
-        Upload[/POST /upload/]
-        TranslateText[/POST /translate-text/]
-        TTSProxy[/POST /tts-proxy/]
-    end
-
-    U --> UI --> Recorder --> VAD --> Chunker --> Network
-    Network --> Upload
-    Upload --> Network
-    Network -.-> TranslateText
-    TranslateText -.-> Network
-    %% Optional client integrations can call /translate-text directly.
-    Network --> Renderer
-    Renderer --> UI
-    Renderer --> TTSQueue
-    TTSQueue --> TTSProxy
-    TTSProxy --> TTSQueue
-```
-
-The diagram highlights how the Flask-served single-page app orchestrates browser APIs. `MediaRecorder` captures Opus audio frames, the custom voice activity detector segments speech before uploading chunks to the REST backend, and responses update the renderer. When text-to-speech is enabled, translations are queued for playback by calling the `/tts-proxy` endpoint and playing the returned Opus audio in the browser.
-
-## Real-time streaming sequence
-
-The sequence diagram below illustrates how the browser, backend and external providers collaborate while processing an audio chunk and optionally requesting text-to-speech playback.
-
-```mermaid
-sequenceDiagram
-    participant User as Speaker
-    participant Browser as Browser UI
-    participant API as FastAPI backend
-    participant Whisper as Whisper STT
-    participant GPT as Translation model
-    participant TTS as TTS provider
-
-    User->>Browser: Speak into microphone
-    Browser->>Browser: Capture Opus chunk<br/>via MediaRecorder
-    Browser->>API: POST /upload (chunk, metadata)
-    API->>Whisper: Transcribe audio chunk
-    Whisper-->>API: Transcript + timing
-    API->>GPT: Request translations
-    GPT-->>API: Translated text
-    API-->>Browser: JSON (transcript + translations)
-    Browser->>Browser: Render transcript & translation
-    alt Text-to-speech enabled
-        Browser->>API: POST /tts-proxy (text)
-        API->>TTS: Forward TTS request
-        TTS-->>API: Stream Opus audio
-        API-->>Browser: Audio response stream
-        Browser->>User: Playback translated audio
-    end
-```
-
-For a standalone version that you can embed elsewhere, see [`docs/streaming-sequence.md`](docs/streaming-sequence.md).
-
-## Prerequisites
-
-* Python 3.10 or newer.
-* `ffmpeg` available on the `PATH` (required by the API to transcode audio chunks for Whisper and TTS).
-* API credentials for speech-to-text and translation providers (see [Environment variables](#environment-variables)).
+The project is CPU-safe by default and does not pin CUDA libraries, so the same scripts are compatible with GPU hosts such as H100/DGX Spark when your upstream providers or local extensions use those accelerators.
 
 ## Quick start
 
-1. **Clone the repository and prepare environment files**
-   ```bash
-   git clone https://github.com/<your-org>/translate-rt.git
-   cd translate-rt
-   cp frontend/.env.example frontend/.env       # customise the secrets
-   cp frontend/.env.example api-translate-rt/.env
-   ```
-   Both the frontend and backend read the same environment variables, so copying the example file into each service directory keeps the configuration in sync.
+```bash
+cp .env.example .env
+cp api-translate-rt/.env.example api-translate-rt/.env
+$EDITOR .env api-translate-rt/.env
+./install.sh
+source ./run.sh 0.0.0.0 5000
+```
 
-2. **Launch the API service**
-   ```bash
-   cd api-translate-rt
-   python3 -m venv .venv
-   source .venv/bin/activate
-   pip install --upgrade pip
-   pip install -r requirements.txt
-   python app.py
-   ```
-   By default the API binds to `SERVER_NAME`/`SERVER_PORT` (defaults to `0.0.0.0:8080`). Override these variables in `api-translate-rt/.env` when you need a different host or port.
+Start the API in another shell:
 
-3. **Start the frontend Flask app (in another shell)**
-   ```bash
-   cd frontend
-   python3 -m venv .venv
-   source .venv/bin/activate
-   pip install --upgrade pip
-   pip install -r requirements.txt
-   python app.py --host 0.0.0.0 --port 5000
-   ```
-   The UI becomes available at [http://localhost:5000](http://localhost:5000). It serves the static assets in `frontend/static/` and issues `fetch` requests directly to the REST endpoints configured in the JavaScript. You can also use `./run.sh 0.0.0.0 5000` if you prefer the bundled helper script to manage the virtual environment for you.
+```bash
+cd api-translate-rt
+./install.sh
+source ./run.sh 0.0.0.0 8080
+```
 
-## Environment variables
+`run.sh [IP] [PORT]` is systemd-compatible: execute it directly from an `ExecStart=` command, or source it during interactive development. The virtual environment path is always `~/venv/<basename project dir>` unless you override `VENV_DIR`.
 
-Create `.env` files next to each service (see `frontend/.env.example`) to share configuration between the scripts. The most relevant settings are:
+## Environment
 
-| Variable | Required | Purpose |
-| --- | --- | --- |
-| `AUDIO_API_KEY` | ✅ | Bearer token used to call the Whisper transcription endpoint (`Cfg.WHISPER_URL`). |
-| `OPENAI_API_KEY` | ✅ | Token for the translation provider used by `/upload` and `/translate-text`. |
-| `OPENAI_API_BASE` | ⚙️ | Base URL of the translation API. Defaults to the public OpenAI endpoint. |
-| `OPENAI_API_MODEL` | ⚙️ | Chat model identifier passed when creating translations. |
-| `DIARIZATION_TOKEN` | ⚙️ | Optional token enabling diarisation via `Cfg.DIAR_URL`. Leave empty to disable diarisation. |
-| `TTS_API_KEY` | ⚙️ | Enables `/tts-proxy` responses when provided. |
-| `TTS_API_URL` | ⚙️ | Overrides the default text-to-speech API endpoint. |
-| `SERVER_NAME` | ⚙️ | Host interface for the frontend Flask app and backend FastAPI service. Defaults to `localhost` for the UI and `0.0.0.0` for the API. |
-| `SERVER_PORT` | ⚙️ | TCP port used by the running service. When launching `run.sh`, the backend port is computed as `SERVER_PORT + 1`. |
+Copy `.env.example` to `.env` for the frontend/runtime defaults and `api-translate-rt/.env.example` to `api-translate-rt/.env` for the backend. Only important variables are shown; optional/default variables are commented with `#`.
 
-> ℹ️ Environment variables marked with ⚙️ are optional; omit them to use the built-in defaults.
+Most deployments need:
 
-## API documentation
+```bash
+AUDIO_API_KEY=...
+OPENAI_API_KEY=...
+OPENAI_API_BASE=https://api.openai.com/v1
+#OPENAI_API_MODEL=gpt-4o-mini
+#TRANSLATE_RT_API_TOKEN=change-me
+```
 
-The backend exposes three REST endpoints. The shipped frontend calls `/upload` for speech translation and `/tts-proxy` for text-
-to-speech playback, while `/translate-text` remains available for auxiliary clients that need pure text translation:
+Set `TRANSLATE_RT_API_TOKEN` to require `Authorization: Bearer <token>` on backend API routes.
 
-* **`POST /upload`** – accepts an audio chunk (`multipart/form-data`) together with `target_lang` and `primary_lang` form fields. Returns transcription, diarisation metadata and per-language translations. A concise summary is available in [`api-translate-rt/README.md`](api-translate-rt/README.md).
-* **`POST /tts-proxy`** – forwards text to the configured TTS provider and streams back Opus audio.
-* **`POST /translate-text`** – translates plain text snippets without uploading audio. This helper endpoint is available for
-  external clients; the bundled frontend currently relies solely on `/upload` responses for its translations.
+## Popular API endpoints
 
-For an OpenAPI snapshot of the REST surface, refer to [`api-translate-rt/mini_OpenAPI.yaml`](api-translate-rt/mini_OpenAPI.yaml).
+Backend endpoints:
 
-## Realtime WebSocket service
+* `GET /healthz`
+* `POST /upload` — `multipart/form-data` audio upload for transcription and translation
+* `POST /translate-text` — JSON text translation helper
+* `POST /tts-proxy` — JSON TTS proxy returning audio bytes
 
-The `api-realtime-ai-futur` package hosts a FastAPI WebSocket endpoint at `/v1/realtime`. It speaks an OpenAI-style realtime
-protocol with messages such as `session.created`, `response.output_text.delta`, and optional `response.audio.delta` streams,
-making it suitable for low-latency conversational translation or voice assistants. Configure it with the same `AUDIO_API_KEY`
-and `OPENAI_API_KEY` values used by the REST backend, plus optional VAD-related environment variables exposed in
-`api-realtime-ai-futur/app.py`.
+The translation provider is called through the popular OpenAI-compatible Chat Completions API at `${OPENAI_API_BASE}/chat/completions`.
 
-## Development tips
+## Systemd examples
 
-* Frontend constants such as the API base URLs, supported languages and VAD thresholds are centralised at the top of [`frontend/static/js/code.js`](frontend/static/js/code.js).
-* Styling relies on the French government DSFR design system served from the CDN; you can add custom overrides in `frontend/static/html/index.html`.
-* When iterating on the backend, tweak FastAPI logging or enable Uvicorn debug output in [`api-translate-rt/app.py`](api-translate-rt/app.py) for more verbose traces.
+Frontend:
+
+```ini
+[Service]
+WorkingDirectory=/opt/translate-rt
+ExecStart=/bin/bash -lc './run.sh 0.0.0.0 5000'
+Restart=always
+```
+
+Backend:
+
+```ini
+[Service]
+WorkingDirectory=/opt/translate-rt/api-translate-rt
+ExecStart=/bin/bash -lc './run.sh 0.0.0.0 8080'
+Restart=always
+```

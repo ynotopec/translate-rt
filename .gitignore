@@ -45,3 +45,10 @@ Thumbs.db
 
 # Project specific
 #*.ftz
+# uv / local tooling
+.venv/
+uv.lock
+
+# Logs and runtime files
+*.log
+*.pid
