@@ -9,7 +9,7 @@ from typing import Any, Dict, Optional
 from urllib.parse import urlsplit
 
 import requests
-from fastapi import Body, FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import Body, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field
@@ -127,6 +127,7 @@ class Cfg:
         if origin.strip()
     ]
     CORS_ALLOW_ORIGIN_REGEX = os.getenv('CORS_ALLOW_ORIGIN_REGEX', '').strip() or None
+    TRANSLATE_RT_API_TOKEN = os.getenv('TRANSLATE_RT_API_TOKEN', '').strip()
 
 
 def _build_origin_regex_from_origin(origin: str) -> Optional[str]:
@@ -437,6 +438,15 @@ class UploadResponse(BaseModel):
     diarization: Dict[str, Any] = Field(default_factory=dict, description='Diarization payload')
 
 
+
+def require_api_token(request: Request) -> None:
+    if not Cfg.TRANSLATE_RT_API_TOKEN:
+        return
+
+    expected = f'Bearer {Cfg.TRANSLATE_RT_API_TOKEN}'
+    if request.headers.get('authorization') != expected:
+        raise HTTPException(status_code=401, detail='Invalid or missing API token')
+
 # ────────────────────────────── FastAPI app ──────────────────────────────
 app = FastAPI()
 
@@ -448,6 +458,14 @@ app.add_middleware(
     allow_methods=['*'],
     allow_headers=['*'],
 )
+
+
+@app.middleware('http')
+async def api_token_middleware(request: Request, call_next):
+    public_paths = {'/healthz', '/docs', '/redoc', '/openapi.json'}
+    if Cfg.TRANSLATE_RT_API_TOKEN and request.url.path not in public_paths:
+        require_api_token(request)
+    return await call_next(request)
 
 
 @app.get('/healthz')
