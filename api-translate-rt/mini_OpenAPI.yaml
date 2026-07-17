@@ -3,7 +3,7 @@ info:
   title: api-translate-rt
   version: "1.0"
 servers:
-  - url: https://api-translate-rt.cloud-pi-native.com
+  - url: /
 paths:
   /upload:
     post:

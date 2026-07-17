@@ -99,22 +99,25 @@ class Cfg:
     OPENAI_API_BASE = os.getenv('OPENAI_API_BASE', '').rstrip('/')
     OPENAI_MODEL = os.getenv('OPENAI_API_MODEL', 'gpt-oss')
 
+    AI_DEV_API_SCHEME = os.getenv('AI_DEV_API_SCHEME', 'https')
+    AI_DEV_API_DOMAIN = os.getenv('AI_DEV_API_DOMAIN', 'ai-dev.numerique-interieur.com')
+
     WHISPER_URL = os.getenv(
         'WHISPER_URL',
-        'https://api-audio2txt.ai-dev.numerique-interieur.com/v1/audio/transcriptions',
+        f'{AI_DEV_API_SCHEME}://api-audio2txt.{AI_DEV_API_DOMAIN}/v1/audio/transcriptions',
     )
     STT_MODEL = os.getenv('STT_MODEL', 'whisper-1')
 
     DIAR_URL = os.getenv(
         'DIAR_URL',
-        'https://api-diarization.ai-dev.numerique-interieur.com/upload-audio/',
+        f'{AI_DEV_API_SCHEME}://api-diarization.{AI_DEV_API_DOMAIN}/upload-audio/',
     )
     DIAR_TOKEN = os.getenv('DIARIZATION_TOKEN')
 
     TTS_API_KEY = os.getenv('TTS_API_KEY')
     TTS_URL = os.getenv(
         'TTS_API_URL',
-        'https://api-txt2audio.ai-dev.numerique-interieur.com/v1/audio/speech',
+        f'{AI_DEV_API_SCHEME}://api-txt2audio.{AI_DEV_API_DOMAIN}/v1/audio/speech',
     )
 
     REQUEST_TIMEOUT = int(os.getenv('REQUEST_TIMEOUT', '30'))
