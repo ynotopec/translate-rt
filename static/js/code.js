@@ -90,14 +90,16 @@
     '#008080','#e6beff','#9a6324','#fffac8','#800000','#aaffc3','#808000','#ffd8b1','#000075','#808080'
   ];
 
+  const RuntimeConfig = window.TRANSLATE_RT_CONFIG || {};
+
   const Net = {
-    UPLOAD_URL: 'https://api-translate-rt.ailab.infocepo.com/upload',
-    TTS_URL:    'https://api-translate-rt.ailab.infocepo.com/tts-proxy',
+    UPLOAD_URL: RuntimeConfig.UPLOAD_URL || '/upload',
+    TTS_URL:    RuntimeConfig.TTS_URL || '/tts-proxy',
     TTS_MODEL:  'gpt-4o-mini-tts',
     TTS_VOICE:  'alloy',
     TTS_TONE:   'Speak in a cheerful and positive tone.',
     TTS_FORMAT: 'opus',
-    API_KEY:    '',
+    API_KEY:    RuntimeConfig.API_KEY || '',
   };
 
   const Limits = {

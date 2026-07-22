@@ -631,6 +631,11 @@
 
 
 
+<!-- Configuration API injectée par Flask -->
+<script>
+  window.TRANSLATE_RT_CONFIG = {{ translate_rt_config|tojson }};
+</script>
+
 <!-- Ton script en dernier -->
 <script defer src="/static/js/code.js"></script>
 

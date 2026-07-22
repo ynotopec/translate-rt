@@ -44,12 +44,17 @@ Most deployments need:
 ```bash
 AUDIO_API_KEY=...
 OPENAI_API_KEY=...
-OPENAI_API_BASE=https://api.openai.com/v1
+OPENAI_API_SCHEME=https
+OPENAI_API_HOST=api.openai.com
+OPENAI_API_BASE=${OPENAI_API_SCHEME}://${OPENAI_API_HOST}/v1
 #OPENAI_API_MODEL=gpt-4o-mini
 #TRANSLATE_RT_API_TOKEN=change-me
+TRANSLATE_RT_API_SCHEME=https
+TRANSLATE_RT_API_HOST=api-translate-rt.ailab.infocepo.com
+TRANSLATE_RT_API_BASE=${TRANSLATE_RT_API_SCHEME}://${TRANSLATE_RT_API_HOST}
 ```
 
-Set `TRANSLATE_RT_API_TOKEN` to require `Authorization: Bearer <token>` on backend API routes.
+Set `TRANSLATE_RT_API_TOKEN` to require `Authorization: Bearer <token>` on backend API routes. The Flask frontend builds browser-facing calls from `TRANSLATE_RT_API_BASE`, so `/upload` resolves to `${TRANSLATE_RT_API_BASE}/upload`.
 
 ## Popular API endpoints
 
