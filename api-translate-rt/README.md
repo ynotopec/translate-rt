@@ -63,6 +63,9 @@ Populate the environment variables described below before launching `app.py`. Th
 | `OPENAI_API_KEY` | ✅ | Token used when requesting translations through `Cfg.OPENAI_API_BASE`. |
 | `OPENAI_API_BASE` | ⚙️ | Base URL of the translation provider (defaults to the OpenAI public API). |
 | `OPENAI_API_MODEL` | ⚙️ | Chat-completions model name used for translations (defaults to `gpt-oss`). |
+| `CONNECT_TIMEOUT` | ⚙️ | Maximum time in seconds to establish an upstream connection (defaults to `5`). |
+| `REQUEST_TIMEOUT` | ⚙️ | Maximum time in seconds to wait for a response from general upstream services (defaults to `30`). |
+| `OPENAI_REQUEST_TIMEOUT` | ⚙️ | Maximum time in seconds to wait for a translation response (defaults to `60`). Keep this above the provider's typical generation latency. |
 | `DIARIZATION_TOKEN` | ⚙️ | Enables diarisation calls to `Cfg.DIAR_URL` when present. |
 | `TTS_API_KEY` | ⚙️ | Required for `/tts-proxy` responses. |
 | `TTS_API_URL` | ⚙️ | Overrides the default text-to-speech endpoint. |
