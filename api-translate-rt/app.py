@@ -29,6 +29,21 @@ def _env_bool(name: str, default: bool = False) -> bool:
     return value.strip().lower() in {'1', 'true', 'yes', 'on'}
 
 
+def _env_timeout(name: str, default: float) -> float:
+    value = os.getenv(name)
+    if value is None:
+        return default
+
+    try:
+        timeout = float(value)
+    except ValueError as exc:
+        raise RuntimeError(f'{name} must be a number') from exc
+
+    if timeout <= 0:
+        raise RuntimeError(f'{name} must be greater than zero')
+    return timeout
+
+
 def _summarize_payload(payload: Any, *, limit: int = 200) -> str:
     try:
         if payload is None:
@@ -120,7 +135,9 @@ class Cfg:
         f'{AI_DEV_API_SCHEME}://api-txt2audio.{AI_DEV_API_DOMAIN}/v1/audio/speech',
     )
 
-    REQUEST_TIMEOUT = int(os.getenv('REQUEST_TIMEOUT', '30'))
+    CONNECT_TIMEOUT = _env_timeout('CONNECT_TIMEOUT', 5)
+    REQUEST_TIMEOUT = _env_timeout('REQUEST_TIMEOUT', 30)
+    OPENAI_REQUEST_TIMEOUT = _env_timeout('OPENAI_REQUEST_TIMEOUT', 60)
     MAX_CACHE_SIZE = int(os.getenv('MAX_CACHE_SIZE', '256'))
 
     CORS_ALLOW_CREDENTIALS = _env_bool('CORS_ALLOW_CREDENTIALS', False)
@@ -196,7 +213,9 @@ session.mount('https://', adapter)
 
 
 def post(url: str, **kwargs: Any) -> requests.Response:
-    kwargs.setdefault('timeout', Cfg.REQUEST_TIMEOUT)
+    # A tuple keeps a slow provider response from inheriting the much shorter
+    # connection-establishment limit.
+    kwargs.setdefault('timeout', (Cfg.CONNECT_TIMEOUT, Cfg.REQUEST_TIMEOUT))
 
     payload_preview: Dict[str, Any] = {}
     for key in ('json', 'data'):
@@ -222,6 +241,9 @@ def post(url: str, **kwargs: Any) -> requests.Response:
             len(response.content),
         )
         return response
+    except requests.Timeout as exc:
+        logger.warning('Upstream request timed out for %s: %s', url, exc)
+        raise HTTPException(status_code=504, detail='Upstream request timed out') from exc
     except requests.RequestException as exc:
         logger.exception('HTTP request failed for %s', url)
         raise HTTPException(status_code=502, detail='Upstream request failed') from exc
@@ -345,6 +367,7 @@ def translate_text_cached(text: str, lang: str) -> str:
             'Content-Type': 'application/json',
         },
         json=payload,
+        timeout=(Cfg.CONNECT_TIMEOUT, Cfg.OPENAI_REQUEST_TIMEOUT),
     )
     raise_for_upstream(response, 'Translation')
 
