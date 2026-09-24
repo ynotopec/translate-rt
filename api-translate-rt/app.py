@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import re
+from concurrent.futures import ThreadPoolExecutor
 from functools import lru_cache
 from io import BytesIO
 from typing import Any, Dict, Optional
@@ -211,6 +212,12 @@ adapter = requests.adapters.HTTPAdapter(
 session.mount('http://', adapter)
 session.mount('https://', adapter)
 
+# Independent upstream round-trips are fanned out on this pool so they overlap
+# instead of adding up on the request's critical path. Keep it comfortably
+# larger than the per-request fan-out (2 for STT/diarization, 2 for targets).
+IO_POOL_WORKERS = int(os.getenv('IO_POOL_WORKERS', '16'))
+io_pool = ThreadPoolExecutor(max_workers=IO_POOL_WORKERS, thread_name_prefix='upstream-io')
+
 
 def post(url: str, **kwargs: Any) -> requests.Response:
     # A tuple keeps a slow provider response from inheriting the much shorter
@@ -387,15 +394,32 @@ def build_translations(text: str, detected_lang: str, primary_lang: str, target_
     primary_lang = _sanitize_lang(primary_lang)
     target_lang = _sanitize_lang(target_lang)
 
-    for lang in {primary_lang, target_lang}:
-        if lang and lang != detected_lang:
-            try:
-                result[f'translation_{lang}'] = translate_text_cached(text, lang)
-            except HTTPException:
-                raise
-            except Exception:
-                logger.exception('[TRANSLATION ERROR target=%s]', lang)
-                result[f'translation_{lang}'] = text
+    # `dict.fromkeys` de-duplicates while keeping a deterministic order, so both
+    # targets are requested concurrently instead of one after the other.
+    targets = [
+        lang
+        for lang in dict.fromkeys((primary_lang, target_lang))
+        if lang and lang != detected_lang
+    ]
+
+    if not targets:
+        return result
+
+    futures = {lang: io_pool.submit(translate_text_cached, text, lang) for lang in targets}
+
+    first_error: Optional[HTTPException] = None
+    for lang, future in futures.items():
+        try:
+            result[f'translation_{lang}'] = future.result()
+        except HTTPException as exc:
+            if first_error is None:
+                first_error = exc
+        except Exception:
+            logger.exception('[TRANSLATION ERROR target=%s]', lang)
+            result[f'translation_{lang}'] = text
+
+    if first_error is not None:
+        raise first_error
 
     return result
 
@@ -438,6 +462,32 @@ def call_diarization(filename: str, content_type: str, data: bytes, target_lang:
     except Exception:
         logger.exception('[DIARIZATION ERROR]')
         return {}
+
+
+def run_transcription_and_diarization(
+    filename: str,
+    content_type: str,
+    data: bytes,
+    target_lang: str,
+) -> tuple[Dict[str, Any], Dict[str, Any]]:
+    """Transcribe and diarize the same chunk concurrently.
+
+    Diarization is only needed for speaker labelling and does not depend on the
+    transcript, so running it before transcription added its full latency to
+    the critical path for nothing. ``call_diarization`` never raises; a
+    transcription failure is re-raised only once both upstream calls have
+    settled, so no pool task is left pending.
+    """
+    diarization_future = io_pool.submit(call_diarization, filename, content_type, data, target_lang)
+    whisper_future = io_pool.submit(call_whisper, filename, content_type, data)
+
+    try:
+        whisper_payload = whisper_future.result() or {}
+    except Exception:
+        diarization_future.result()
+        raise
+
+    return whisper_payload, diarization_future.result()
 
 
 def detect_language(text: str) -> str:
@@ -558,7 +608,7 @@ def translate_text_endpoint(payload: TextTranslationRequest) -> TextTranslationR
 
 
 @app.post('/upload')
-async def upload(
+def upload(
     file: UploadFile = File(...),
     target_lang: str = Form('fr'),
     primary_lang: str = Form('fr'),
@@ -572,10 +622,13 @@ async def upload(
     filename = file.filename or 'audio.bin'
     content_type = _guess_content_type(file, filename)
 
+    # This route is intentionally synchronous: Starlette offloads sync
+    # handlers to a worker thread, so the blocking `requests` round-trips
+    # below no longer stall the event loop (and every other request with it).
     try:
-        contents = await file.read()
+        contents = file.file.read()
     finally:
-        await file.close()
+        file.file.close()
 
     if not contents:
         raise HTTPException(status_code=400, detail='Uploaded file is empty')
@@ -587,13 +640,17 @@ async def upload(
             'diarization': {},
         }
 
-    diarization = call_diarization(filename, content_type, contents, target_lang)
-
+    diarization: Dict[str, Any] = {}
     whisper_payload: Dict[str, Any] = {}
     transcription = ''
 
     try:
-        whisper_payload = call_whisper(filename, content_type, contents) or {}
+        whisper_payload, diarization = run_transcription_and_diarization(
+            filename,
+            content_type,
+            contents,
+            target_lang,
+        )
         transcription = _normalize_text(whisper_payload.get('text', ''))
     except HTTPException:
         raise
