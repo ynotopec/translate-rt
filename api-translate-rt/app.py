@@ -558,7 +558,7 @@ def translate_text_endpoint(payload: TextTranslationRequest) -> TextTranslationR
 
 
 @app.post('/upload')
-async def upload(
+def upload(
     file: UploadFile = File(...),
     target_lang: str = Form('fr'),
     primary_lang: str = Form('fr'),
@@ -572,10 +572,13 @@ async def upload(
     filename = file.filename or 'audio.bin'
     content_type = _guess_content_type(file, filename)
 
+    # This route is intentionally synchronous: Starlette offloads sync
+    # handlers to a worker thread, so the blocking `requests` round-trips
+    # below no longer stall the event loop (and every other request with it).
     try:
-        contents = await file.read()
+        contents = file.file.read()
     finally:
-        await file.close()
+        file.file.close()
 
     if not contents:
         raise HTTPException(status_code=400, detail='Uploaded file is empty')
