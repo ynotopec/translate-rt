@@ -464,30 +464,61 @@ def call_diarization(filename: str, content_type: str, data: bytes, target_lang:
         return {}
 
 
-def run_transcription_and_diarization(
+def process_audio_chunk(
     filename: str,
     content_type: str,
     data: bytes,
+    primary_lang: str,
     target_lang: str,
-) -> tuple[Dict[str, Any], Dict[str, Any]]:
-    """Transcribe and diarize the same chunk concurrently.
+) -> Dict[str, Any]:
+    """Run the audio pipeline while overlapping independent provider calls.
 
-    Diarization is only needed for speaker labelling and does not depend on the
-    transcript, so running it before transcription added its full latency to
-    the critical path for nothing. ``call_diarization`` never raises; a
-    transcription failure is re-raised only once both upstream calls have
-    settled, so no pool task is left pending.
+    Translation can begin as soon as Whisper returns because it does not need
+    diarization.  The critical path is consequently close to
+    ``max(diarization, transcription + translation)`` instead of the sum of
+    diarization and translation.
     """
     diarization_future = io_pool.submit(call_diarization, filename, content_type, data, target_lang)
-    whisper_future = io_pool.submit(call_whisper, filename, content_type, data)
 
     try:
-        whisper_payload = whisper_future.result() or {}
+        # The synchronous route already runs in a Starlette worker thread, so
+        # submitting Whisper to another pool only adds scheduling overhead.
+        whisper_payload = call_whisper(filename, content_type, data) or {}
     except Exception:
+        # Do not leave work associated with a failed request running.
         diarization_future.result()
         raise
 
-    return whisper_payload, diarization_future.result()
+    transcription = _normalize_text(whisper_payload.get('text', ''))
+    if transcription and _looks_like_noise(transcription, whisper_payload):
+        logger.info("[WHISPER] filtered probable noise transcript: %r", transcription)
+        transcription = ''
+
+    detected_lang = ''
+    translations: Dict[str, str] = {}
+    try:
+        if transcription and transcription.lower() not in FILTER_NORMALIZED:
+            detected_lang = detect_language(transcription)
+            translations = build_translations(
+                transcription,
+                detected_lang,
+                primary_lang,
+                target_lang,
+            )
+    finally:
+        # Always settle the future before returning or propagating an error.
+        diarization = diarization_future.result()
+
+    if not transcription or transcription.lower() in FILTER_NORMALIZED:
+        transcription = ''
+        detected_lang = ''
+
+    return {
+        'transcription': transcription,
+        'detected_lang': detected_lang,
+        'diarization': diarization,
+        **translations,
+    }
 
 
 def detect_language(text: str) -> str:
@@ -640,45 +671,23 @@ def upload(
             'diarization': {},
         }
 
-    diarization: Dict[str, Any] = {}
-    whisper_payload: Dict[str, Any] = {}
-    transcription = ''
-
     try:
-        whisper_payload, diarization = run_transcription_and_diarization(
+        return process_audio_chunk(
             filename,
             content_type,
             contents,
+            primary_lang,
             target_lang,
         )
-        transcription = _normalize_text(whisper_payload.get('text', ''))
     except HTTPException:
         raise
     except Exception:
         logger.exception('[WHISPER ERROR]')
-        transcription = ''
-
-    if transcription and _looks_like_noise(transcription, whisper_payload):
-        logger.info("[WHISPER] filtered probable noise transcript: %r", transcription)
-        transcription = ''
-
-    if not transcription or transcription.lower() in FILTER_NORMALIZED:
         return {
             'transcription': '',
             'detected_lang': '',
-            'diarization': diarization,
+            'diarization': {},
         }
-
-    detected_lang = detect_language(transcription)
-
-    response: Dict[str, Any] = {
-        'transcription': transcription,
-        'detected_lang': detected_lang,
-        'diarization': diarization,
-    }
-
-    response.update(build_translations(transcription, detected_lang, primary_lang, target_lang))
-    return response
 
 
 # ────────────────────────────── Entrypoint ──────────────────────────────
