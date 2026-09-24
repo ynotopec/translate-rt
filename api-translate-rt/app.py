@@ -394,15 +394,32 @@ def build_translations(text: str, detected_lang: str, primary_lang: str, target_
     primary_lang = _sanitize_lang(primary_lang)
     target_lang = _sanitize_lang(target_lang)
 
-    for lang in {primary_lang, target_lang}:
-        if lang and lang != detected_lang:
-            try:
-                result[f'translation_{lang}'] = translate_text_cached(text, lang)
-            except HTTPException:
-                raise
-            except Exception:
-                logger.exception('[TRANSLATION ERROR target=%s]', lang)
-                result[f'translation_{lang}'] = text
+    # `dict.fromkeys` de-duplicates while keeping a deterministic order, so both
+    # targets are requested concurrently instead of one after the other.
+    targets = [
+        lang
+        for lang in dict.fromkeys((primary_lang, target_lang))
+        if lang and lang != detected_lang
+    ]
+
+    if not targets:
+        return result
+
+    futures = {lang: io_pool.submit(translate_text_cached, text, lang) for lang in targets}
+
+    first_error: Optional[HTTPException] = None
+    for lang, future in futures.items():
+        try:
+            result[f'translation_{lang}'] = future.result()
+        except HTTPException as exc:
+            if first_error is None:
+                first_error = exc
+        except Exception:
+            logger.exception('[TRANSLATION ERROR target=%s]', lang)
+            result[f'translation_{lang}'] = text
+
+    if first_error is not None:
+        raise first_error
 
     return result
 
