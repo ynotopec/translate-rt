@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import re
+from concurrent.futures import ThreadPoolExecutor
 from functools import lru_cache
 from io import BytesIO
 from typing import Any, Dict, Optional
@@ -210,6 +211,12 @@ adapter = requests.adapters.HTTPAdapter(
 )
 session.mount('http://', adapter)
 session.mount('https://', adapter)
+
+# Independent upstream round-trips are fanned out on this pool so they overlap
+# instead of adding up on the request's critical path. Keep it comfortably
+# larger than the per-request fan-out (2 for STT/diarization, 2 for targets).
+IO_POOL_WORKERS = int(os.getenv('IO_POOL_WORKERS', '16'))
+io_pool = ThreadPoolExecutor(max_workers=IO_POOL_WORKERS, thread_name_prefix='upstream-io')
 
 
 def post(url: str, **kwargs: Any) -> requests.Response:
@@ -440,6 +447,32 @@ def call_diarization(filename: str, content_type: str, data: bytes, target_lang:
         return {}
 
 
+def run_transcription_and_diarization(
+    filename: str,
+    content_type: str,
+    data: bytes,
+    target_lang: str,
+) -> tuple[Dict[str, Any], Dict[str, Any]]:
+    """Transcribe and diarize the same chunk concurrently.
+
+    Diarization is only needed for speaker labelling and does not depend on the
+    transcript, so running it before transcription added its full latency to
+    the critical path for nothing. ``call_diarization`` never raises; a
+    transcription failure is re-raised only once both upstream calls have
+    settled, so no pool task is left pending.
+    """
+    diarization_future = io_pool.submit(call_diarization, filename, content_type, data, target_lang)
+    whisper_future = io_pool.submit(call_whisper, filename, content_type, data)
+
+    try:
+        whisper_payload = whisper_future.result() or {}
+    except Exception:
+        diarization_future.result()
+        raise
+
+    return whisper_payload, diarization_future.result()
+
+
 def detect_language(text: str) -> str:
     try:
         from langdetect import detect
@@ -590,13 +623,17 @@ def upload(
             'diarization': {},
         }
 
-    diarization = call_diarization(filename, content_type, contents, target_lang)
-
+    diarization: Dict[str, Any] = {}
     whisper_payload: Dict[str, Any] = {}
     transcription = ''
 
     try:
-        whisper_payload = call_whisper(filename, content_type, contents) or {}
+        whisper_payload, diarization = run_transcription_and_diarization(
+            filename,
+            content_type,
+            contents,
+            target_lang,
+        )
         transcription = _normalize_text(whisper_payload.get('text', ''))
     except HTTPException:
         raise
