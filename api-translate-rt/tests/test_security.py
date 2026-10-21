@@ -18,6 +18,11 @@ sys.modules[spec.name] = frontend
 spec.loader.exec_module(frontend)
 
 
+@pytest.fixture(autouse=True)
+def local_demo_mode(monkeypatch):
+    monkeypatch.setenv('FRONTEND_AUTH_MODE', 'none')
+
+
 @pytest.fixture
 def client():
     api.app.middleware_stack = None

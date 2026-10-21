@@ -4,6 +4,8 @@ import os
 import requests
 from flask import Flask, jsonify, render_template, request
 
+from frontend_security import configure_security
+
 
 def _join_url(base_url, path):
     return f'{base_url.rstrip("/")}/{path.lstrip("/")}'
@@ -21,6 +23,7 @@ def _frontend_api_base():
 
 app = Flask(__name__, template_folder='static/html', static_url_path='/static')
 app.config['MAX_CONTENT_LENGTH'] = int(os.getenv('MAX_REQUEST_BYTES', str(12 * 1024 * 1024)))
+configure_security(app)
 
 
 @app.post('/api/<operation>')
@@ -33,8 +36,9 @@ def proxy_api(operation):
     if request.headers.get('X-Translate-RT') != '1':
         return jsonify(detail='En-tête de requête manquant'), 403
     origin = request.headers.get('Origin')
-    if origin and origin.rstrip('/') != os.getenv('FRONTEND_PUBLIC_ORIGIN', request.host_url).rstrip('/'):
-        return jsonify(detail='Origine non autorisée'), 403
+    public_origin = os.getenv('FRONTEND_PUBLIC_ORIGIN', '').strip() or request.host_url
+    if origin and origin.rstrip('/') != public_origin.rstrip('/'):
+        return jsonify(detail='Origine non autorisée : vérifier FRONTEND_PUBLIC_ORIGIN sur le frontal'), 403
     headers = {'Content-Type': request.content_type or 'application/octet-stream'}
     token = os.getenv('TRANSLATE_RT_API_TOKEN', '').strip()
     if token:

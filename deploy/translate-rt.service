@@ -1,0 +1,24 @@
+[Unit]
+Description=Translate RT frontend (Gunicorn)
+After=network.target
+
+[Service]
+Type=simple
+User=translate-rt
+Group=translate-rt
+WorkingDirectory=/opt/translate-rt
+# Pre-install dependencies with install.sh as the service user.
+Environment=VENV_DIR=/opt/translate-rt-venv
+Environment=SERVER_NAME=127.0.0.1
+Environment=SERVER_PORT=5000
+# run.sh reads /opt/translate-rt/.env (shell syntax, trusted, mode 600).
+ExecStart=/bin/bash /opt/translate-rt/run.sh
+Restart=on-failure
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
