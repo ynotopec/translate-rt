@@ -19,10 +19,10 @@ def authorize_request():
     g.csp_nonce = secrets.token_urlsafe(24)
     if request.path == '/.well-known/security.txt':
         return None
-    mode = os.getenv('FRONTEND_AUTH_MODE', 'basic').strip().lower()
+    mode = os.getenv('FRONTEND_AUTH_MODE', 'none').strip().lower()
     if mode in {'proxy', 'none'}:
         # proxy requires an independently authenticated, private upstream.
-        # none is an explicit opt-out for local demos only.
+        # none intentionally provides public access to the frontend and proxy.
         return None
     if mode != 'basic':
         return jsonify(detail='FRONTEND_AUTH_MODE invalide'), 503

@@ -96,9 +96,9 @@ still select the upstream destination, but the Flask host must now reach it.
 Configure the same strong token in both services. Direct API clients continue to
 use `Authorization: Bearer <token>` on the existing routes.
 
-The frontend provides Basic authentication by default (see Production hardening below).
-For a managed SSO deployment, explicitly select proxy mode and protect the entire
-Flask origin at your reverse proxy. Keep the backend private.
+The frontend is public by default (FRONTEND_AUTH_MODE=none), including browser
+calls to /api/*. Basic authentication and managed SSO via proxy mode are optional.
+Keep the backend credentials server-side and the raw upstream ports private.
 The `X-Translate-RT: 1` header and origin checks prevent browser cross-origin
 submission; they do not authenticate a user or stop direct HTTP clients.
 Do not enable cross-origin access on Flask. Behind a TLS-terminating proxy, set
@@ -164,22 +164,24 @@ retention and rights contact); complete them before public use.
 
 ## Production hardening (follow-up to the audit)
 
-**Migration:** the frontend now defaults to Basic authentication. Until the user
-and password hash are configured, it returns **503** instead of silently opening
-the proxy to anonymous callers. The backend API token is separate from this user
-credential and stays on the server. No new Python dependency is needed.
+**Public access is the default:** FRONTEND_AUTH_MODE=none serves the frontend
+and its /api/* proxy without a login. No frontend username or password is required.
+The shared backend API token stays on the server. Size, concurrency/rate limits,
+origin checks and security headers still apply. No new Python dependency is needed.
 
-Generate a password hash interactively inside the installed virtual environment:
+For an optional password-protected instance, select FRONTEND_AUTH_MODE=basic
+and generate a hash interactively inside the installed virtual environment:
 
 ```bash
 python -c 'import getpass,shlex; from werkzeug.security import generate_password_hash; print("FRONTEND_AUTH_PASSWORD_HASH=" + shlex.quote(generate_password_hash(getpass.getpass("Password: "))))'
 ```
 
-Copy the output into the frontend `.env` (preserve the quotes), then set:
+Only for Basic mode, copy the output into the frontend `.env` (preserve the quotes)
+and set FRONTEND_AUTH_USER. Without those credentials, explicitly selected Basic
+mode returns 503. The public configuration is:
 
 ```dotenv
-FRONTEND_AUTH_MODE=basic
-FRONTEND_AUTH_USER=your-user
+FRONTEND_AUTH_MODE=none
 FRONTEND_PUBLIC_ORIGIN=https://app.example.com
 TRANSLATE_RT_API_BASE=https://api-app.example.com
 ```
@@ -192,10 +194,10 @@ A blank origin falls back to the directly observed request origin; forwarded
 headers are not trusted automatically. A 403 origin error describes which setting
 to check. Restart/recreate services after changing their environment.
 
-If SSO already protects the entire frontend, set `FRONTEND_AUTH_MODE=proxy` and
-ensure no direct path to the upstream bypasses SSO. For an intentional local demo,
-`FRONTEND_AUTH_MODE=none` disables user authentication; the API token alone does
-not protect that public frontend proxy. Do not choose this mode for a private service.
+If SSO is desired, protect the entire frontend at the reverse proxy, set
+`FRONTEND_AUTH_MODE=proxy` and ensure no direct path bypasses SSO. Public mode
+intentionally lets visitors use transcription and TTS through Flask while keeping
+the backend token out of the browser. Use the supplied Nginx/API limits to bound demand.
 
 `run.sh` now launches Gunicorn and binds `127.0.0.1` by default. Explicit IP/port
 arguments still work; use `0.0.0.0` only on an isolated container/private interface.

@@ -8,8 +8,10 @@ no more than one year away. Only then does /.well-known/security.txt publish a
 Contact and Expires field. An unset contact returns 404; an invalid/expired
 configured expiry returns 503, rather than presenting a misleading disclosure policy.
 
-Review deployment instructions in README.md. The frontend defaults to Basic auth;
-FRONTEND_AUTH_MODE=proxy delegates authentication to an independently protected
-reverse proxy. FRONTEND_AUTH_MODE=none is reserved for explicit local demos.
-Basic auth must be served over HTTPS. Keep raw Flask/FastAPI ports private and
+Review deployment instructions in README.md. The frontend defaults to public access
+(FRONTEND_AUTH_MODE=none), including browser calls to /api/*. Backend credentials
+stay on the server; request/connection limits also apply to anonymous traffic.
+FRONTEND_AUTH_MODE=basic optionally restricts access with a password, while
+FRONTEND_AUTH_MODE=proxy delegates it to an authenticated reverse proxy.
+When enabled, Basic auth must be served over HTTPS. Keep raw Flask/FastAPI ports private and
 restrict access to them with firewall/container networking rules.

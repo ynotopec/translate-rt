@@ -20,13 +20,15 @@ def credentials(password='fixture-password'):
     return {'Authorization': 'Basic ' + base64.b64encode(f'test-user:{password}'.encode()).decode()}
 
 
-def test_auth_fails_closed_without_configuration():
+def test_basic_auth_fails_closed_without_configuration(monkeypatch):
+    monkeypatch.setenv('FRONTEND_AUTH_MODE', 'basic')
     client = frontend.app.test_client()
     for path in ['/', '/api/upload', '/static/js/code.js']:
         assert client.open(path, method='POST' if path.startswith('/api/') else 'GET').status_code == 503
 
 
 def test_authentication_on_frontend_and_proxy(monkeypatch):
+    monkeypatch.setenv('FRONTEND_AUTH_MODE', 'basic')
     monkeypatch.setenv('FRONTEND_AUTH_USER', 'test-user')
     monkeypatch.setenv('FRONTEND_AUTH_PASSWORD_HASH', generate_password_hash('fixture-password'))
     client = frontend.app.test_client()
@@ -108,3 +110,26 @@ def test_security_txt_needs_real_contact_and_valid_expiry(monkeypatch):
     assert f'Expires: {expiry}' in response.text
     monkeypatch.setenv('SECURITY_EXPIRES', '2020-01-01T00:00:00Z')
     assert client.get('/.well-known/security.txt').status_code == 503
+
+
+def test_public_default_allows_frontend_and_proxy_without_login(monkeypatch):
+    monkeypatch.setenv('TRANSLATE_RT_API_TOKEN', 'fixture-backend-token')
+    client = frontend.app.test_client()
+    for path in ['/', '/static/js/code.js']:
+        response = client.get(path)
+        assert response.status_code == 200
+        assert 'WWW-Authenticate' not in response.headers
+        assert 'fixture-backend-token' not in response.text
+    with patch.object(frontend.requests, 'post', return_value=Mock(
+        content=b'{}', status_code=200, headers={'Content-Type': 'application/json'})
+    ) as post:
+        for path in ['/api/upload', '/api/tts-proxy']:
+            response = client.post(path, headers={'X-Translate-RT': '1'})
+            assert response.status_code == 200
+            assert 'WWW-Authenticate' not in response.headers
+            assert post.call_args.kwargs['headers']['Authorization'] == 'Bearer fixture-backend-token'
+        post.reset_mock()
+        assert client.post('/api/upload').status_code == 403
+        assert client.post('/api/upload', headers={
+            'X-Translate-RT': '1', 'Origin': 'https://attacker.example.com'}).status_code == 403
+        post.assert_not_called()
