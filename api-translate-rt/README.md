@@ -55,13 +55,13 @@ flowchart LR
 
 ## Environment configuration
 
-Populate the environment variables described below before launching `app.py`. The shared sample configuration lives in [`../frontend/.env.example`](../frontend/.env.example); copy it to `api-translate-rt/.env` and customise the values for your deployment.
+Populate the environment variables described below before launching `app.py`. The shared sample configuration lives in [`.env.example`](.env.example); copy it to `api-translate-rt/.env` and customise the values for your deployment.
 
 | Variable | Required | Description |
 | --- | --- | --- |
 | `AUDIO_API_KEY` | ✅ | Bearer token passed to the Whisper transcription endpoint (`Cfg.WHISPER_URL`). |
 | `OPENAI_API_KEY` | ✅ | Token used when requesting translations through `Cfg.OPENAI_API_BASE`. |
-| `OPENAI_API_BASE` | ⚙️ | Base URL of the translation provider (defaults to the OpenAI public API). |
+| `OPENAI_API_BASE` | ⚙️ | Base URL of the translation provider (mandatory; no default). |
 | `OPENAI_API_MODEL` | ⚙️ | Chat-completions model name used for translations (defaults to `gpt-oss`). |
 | `CONNECT_TIMEOUT` | ⚙️ | Maximum time in seconds to establish an upstream connection (defaults to `5`). |
 | `REQUEST_TIMEOUT` | ⚙️ | Maximum time in seconds to wait for a response from general upstream services (defaults to `30`). |
@@ -127,7 +127,7 @@ Use this endpoint to send discrete chunks recorded in the browser or uploaded fr
 }
 ```
 
-The response streams an Opus audio payload suitable for immediate playback in the browser.
+The response returns buffered audio bytes (not streaming).
 
 ### `POST /translate-text`
 
@@ -181,5 +181,5 @@ The command above sends a JSON body to the translation endpoint using environmen
 
 ## Related files
 
-* [`../frontend/static/js/code.js`](../frontend/static/js/code.js) – frontend logic that connects to `/upload` and `/tts-proxy`.
+* [`../static/js/code.js`](../static/js/code.js) – frontend logic that connects to `/upload` and `/tts-proxy`.
 * [`mini_OpenAPI.yaml`](mini_OpenAPI.yaml) – OpenAPI snippet that can be imported into API tooling.

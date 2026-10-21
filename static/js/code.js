@@ -86,20 +86,19 @@
   };
 
   const Colors = [
-    '#e6194b','#3cb44b','#ffe119','#4363d8','#f58231','#911eb4','#46f0f0','#f032e6','#bcf60c','#fabebe',
-    '#008080','#e6beff','#9a6324','#fffac8','#800000','#aaffc3','#808000','#ffd8b1','#000075','#808080'
+    'var(--text-default-info)', 'var(--text-default-success)',
+    'var(--text-default-warning)', 'var(--text-default-error)'
   ];
 
   const RuntimeConfig = window.TRANSLATE_RT_CONFIG || {};
 
   const Net = {
-    UPLOAD_URL: RuntimeConfig.UPLOAD_URL || '/upload',
-    TTS_URL:    RuntimeConfig.TTS_URL || '/tts-proxy',
+    UPLOAD_URL: RuntimeConfig.UPLOAD_URL || '/api/upload',
+    TTS_URL:    RuntimeConfig.TTS_URL || '/api/tts-proxy',
     TTS_MODEL:  'gpt-4o-mini-tts',
     TTS_VOICE:  'alloy',
     TTS_TONE:   'Speak in a cheerful and positive tone.',
     TTS_FORMAT: 'opus',
-    API_KEY:    RuntimeConfig.API_KEY || '',
   };
 
   const Limits = {
@@ -468,6 +467,7 @@
 
         const res = await fetch(Net.UPLOAD_URL, {
           method: 'POST',
+          headers: { 'X-Translate-RT': '1' },
           body: fd
         });
 
@@ -500,10 +500,7 @@
           State.mediaRecorder.pause();
         }
 
-        const headers = { 'Content-Type': 'application/json' };
-        if (Net.API_KEY) {
-          headers.Authorization = `Bearer ${Net.API_KEY}`;
-        }
+        const headers = { 'Content-Type': 'application/json', 'X-Translate-RT': '1' };
 
         const response = await fetch(Net.TTS_URL, {
           method: 'POST',
@@ -659,9 +656,10 @@
       const identifier = rawIdentifier ? String(rawIdentifier).slice(-4) : '';
 
       const targetLang = DOM.langSelect?.value || 'fr';
-      const primaryLang = DOM.primaryLangSelect?.value || 'fr';
 
-      const tradKeys = [`translation_${primaryLang}`, `translation_${targetLang}`];
+      // If speech is already in the target language, keep the original.
+      const tradKeys = result.detected_lang === targetLang
+        ? [] : [`translation_${targetLang}`];
       const translated = tradKeys.map(k => result?.[k]).find(Boolean) || transcription;
 
       const phraseForTTS = (translated && translated !== transcription) ? translated : null;

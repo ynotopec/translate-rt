@@ -10,6 +10,8 @@
     <!-- DSFR CSS -->
     <link href="https://cdn.jsdelivr.net/npm/@gouvfr/dsfr@1.11.2/dist/dsfr.min.css" rel="stylesheet">
     
+    <link href="https://cdn.jsdelivr.net/npm/@gouvfr/dsfr@1.11.2/dist/utility/utility.min.css" rel="stylesheet">
+
     <!-- Favicon officiel -->
     <link rel="apple-touch-icon" href="https://cdn.jsdelivr.net/npm/@gouvfr/dsfr@1.11.2/dist/favicon/apple-touch-icon.png">
     <link rel="icon" href="https://cdn.jsdelivr.net/npm/@gouvfr/dsfr@1.11.2/dist/favicon/favicon.svg" type="image/svg+xml">
@@ -17,7 +19,7 @@
     
     <style>
         /* Styles personnalisés complémentaires au DSFR */
-        .fr-container--custom {
+        .translation-container {
             max-width: 1000px;
         }
         
@@ -81,7 +83,7 @@
         }
         
         .tts-current {
-            background-color: #e0f7fa;
+            background-color: var(--background-alt-blue-france);
             font-weight: bold;
             transition: background-color 0.3s ease;
         }
@@ -122,7 +124,7 @@
         .popular-languages .primary-lang-chip:focus {
             background-color: var(--blue-france-500) !important;
             border-color: var(--blue-france-500) !important;
-            color: #fff !important;
+            color: var(--text-inverted-blue-france) !important;
         }
 
         /* === CONTRÔLES - RESPONSIVE === */
@@ -194,7 +196,7 @@
         
         /* Mobile */
         @media (max-width: 768px) {
-            .fr-container--custom {
+            .translation-container {
                 padding: 0 1rem;
             }
             
@@ -294,6 +296,7 @@
     </style>
 </head>
 <body>
+    <div class="fr-skiplinks"><nav class="fr-container" aria-label="Accès rapide"><ul class="fr-skiplinks__list"><li><a class="fr-link" href="#main-content">Contenu</a></li></ul></nav></div>
     <!-- En-tête officiel -->
     <header class="fr-header">
         <div class="fr-header__body">
@@ -324,7 +327,7 @@
     </header>
 
     <!-- Contenu principal -->
-    <main class="fr-container fr-container--custom fr-my-6w fade-in" id="main-content">
+    <main class="fr-container translation-container fr-my-6w fade-in" id="main-content" tabindex="-1">
         
         <!-- Titre principal -->
         <div class="fr-mb-6w">
@@ -510,7 +513,7 @@
                                 type="button">
                             Commencer l'enregistrement
                         </button>
-                        <button class="fr-btn fr-btn--lg fr-btn--secondary fr-icon-stop-line fr-btn--icon-left" 
+                        <button class="fr-btn fr-btn--lg fr-btn--secondary fr-icon-stop-circle-line fr-btn--icon-left"
                                 id="stopButton" 
                                 type="button" 
                                 disabled>
@@ -559,9 +562,9 @@
                 </button>
             </h3>
             <div class="fr-collapse" id="accordion-help">
-                <div class="fr-accordion__body">
-                    <div class="fr-accordion__inner">
-                        <ol class="fr-ol">
+                <div class="accordion-body">
+                    <div class="accordion-inner">
+                        <ol >
                             <li>Sélectionnez votre langue source (langue dans laquelle vous allez parler)</li>
                             <li>Sélectionnez la langue de destination pour la traduction</li>
                             <li>Cliquez sur "Commencer l'enregistrement" et autorisez l'accès au microphone</li>
@@ -578,6 +581,26 @@
             </div>
         </div>
 
+        <section id="privacy-info" class="fr-mt-4w" aria-labelledby="privacy-title">
+            <h2 id="privacy-title">Données personnelles</h2>
+            <p>En démarrant l’enregistrement, vous transmettez votre voix aux services de transcription,
+            de traduction et, si configurés, de diarisation et de synthèse vocale de cette instance.
+            Évitez les informations sensibles. Le serveur applicatif ne conserve pas les traductions en cache
+            et ne journalise pas les contenus envoyés. Les résultats restent dans cette page jusqu’à sa fermeture ;
+            un export téléchargé reste sous votre responsabilité.</p>
+            <p>L’exploitant doit préciser les fournisseurs, leur conservation, la base légale et le contact
+            d’exercice des droits avant une ouverture au public. L’autorisation du microphone ne remplace pas cette information.</p>
+        </section>
+        <section id="legal-info" class="fr-mt-4w" aria-labelledby="legal-title">
+            <h2 id="legal-title">Mentions légales</h2>
+            <p>Prototype : identité de l’éditeur, responsable de publication, hébergeur et contact
+            à compléter par l’exploitant avant une ouverture au public.</p>
+        </section>
+        <section id="accessibility-info" class="fr-mt-4w" aria-labelledby="accessibility-title">
+            <h2 id="accessibility-title">Accessibilité</h2>
+            <p>Service non audité : conformité RGAA non établie. L’exploitant doit publier sa déclaration
+            et un contact de signalement après audit.</p>
+        </section>
     </main>
 
     <!-- Pied de page -->
@@ -595,18 +618,18 @@
                         Service numérique développé dans le cadre de la transformation digitale de l'État français.
                     </p>
                     <ul class="fr-footer__content-list">
-                        <li class="fr-footer__content-item">
-                            <a class="fr-footer__content-link" href="#" target="_blank" rel="noopener noreferrer">
+                        <li>
+                            <a class="fr-footer__content-link" href="#accessibility-info">
                                 Accessibilité : non conforme
                             </a>
                         </li>
-                        <li class="fr-footer__content-item">
-                            <a class="fr-footer__content-link" href="#" target="_blank" rel="noopener noreferrer">
+                        <li>
+                            <a class="fr-footer__content-link" href="#legal-info">
                                 Mentions légales
                             </a>
                         </li>
-                        <li class="fr-footer__content-item">
-                            <a class="fr-footer__content-link" href="#" target="_blank" rel="noopener noreferrer">
+                        <li>
+                            <a class="fr-footer__content-link" href="#privacy-info">
                                 Données personnelles
                             </a>
                         </li>
@@ -670,7 +693,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
             if (isRecording) {
                 recordingIndicator.classList.add('active');
-                recordButton.innerHTML = '<span class="fr-icon-loader-3-line fr-icon--sm fr-mr-1w" aria-hidden="true"></span>Enregistrement en cours...';
+                recordButton.innerHTML = '<span class="fr-icon-refresh-line fr-icon--sm fr-mr-1w" aria-hidden="true"></span>Enregistrement en cours...';
                 recordButton.classList.add('fr-btn--secondary');
             } else {
                 recordingIndicator.classList.remove('active');
@@ -850,7 +873,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (btn.textContent.includes('Commencer')) {
                     btn.innerHTML = '<span class="fr-icon-play-line" aria-hidden="true"></span><span class="fr-ml-1w">Démarrer</span>';
                 } else if (btn.textContent.includes('Arrêter')) {
-                    btn.innerHTML = '<span class="fr-icon-stop-line" aria-hidden="true"></span><span class="fr-ml-1w">Arrêter</span>';
+                    btn.innerHTML = '<span class="fr-icon-stop-circle-line" aria-hidden="true"></span><span class="fr-ml-1w">Arrêter</span>';
                 } else if (btn.textContent.includes('Sauvegarder')) {
                     btn.innerHTML = '<span class="fr-icon-download-line" aria-hidden="true"></span><span class="fr-ml-1w">Sauvegarder</span>';
                 }

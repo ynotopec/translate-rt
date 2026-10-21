@@ -1,19 +1,19 @@
 # /home/ailab/api-translate-rt/app.py
-import json
 import logging
 import os
 import re
 from concurrent.futures import ThreadPoolExecutor
-from functools import lru_cache
 from io import BytesIO
 from typing import Any, Dict, Optional
 from urllib.parse import urlsplit
 
 import requests
-from fastapi import Body, FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import Body, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field
+
+from guards import RequestGuards
 
 # ────────────────────────────── Logging ──────────────────────────────
 logging.basicConfig(
@@ -43,29 +43,6 @@ def _env_timeout(name: str, default: float) -> float:
     if timeout <= 0:
         raise RuntimeError(f'{name} must be greater than zero')
     return timeout
-
-
-def _summarize_payload(payload: Any, *, limit: int = 200) -> str:
-    try:
-        if payload is None:
-            return 'None'
-        if isinstance(payload, bytes):
-            decoded = payload.decode('utf-8', errors='replace')
-            return decoded if len(decoded) <= limit else decoded[:limit] + '…'
-        if isinstance(payload, str):
-            return payload if len(payload) <= limit else payload[:limit] + '…'
-        if isinstance(payload, (int, float, bool)):
-            return repr(payload)
-        if isinstance(payload, dict):
-            data = json.dumps(payload, default=str, ensure_ascii=False)
-            return data if len(data) <= limit else data[:limit] + '…'
-        if isinstance(payload, (list, tuple, set)):
-            data = json.dumps(list(payload), default=str, ensure_ascii=False)
-            return data if len(data) <= limit else data[:limit] + '…'
-        data = repr(payload)
-        return data if len(data) <= limit else data[:limit] + '…'
-    except Exception as exc:
-        return f'<unserializable payload: {exc}>'
 
 
 def _sanitize_lang(value: Optional[str], default: str = 'fr') -> str:
@@ -139,7 +116,6 @@ class Cfg:
     CONNECT_TIMEOUT = _env_timeout('CONNECT_TIMEOUT', 5)
     REQUEST_TIMEOUT = _env_timeout('REQUEST_TIMEOUT', 30)
     OPENAI_REQUEST_TIMEOUT = _env_timeout('OPENAI_REQUEST_TIMEOUT', 60)
-    MAX_CACHE_SIZE = int(os.getenv('MAX_CACHE_SIZE', '256'))
 
     CORS_ALLOW_CREDENTIALS = _env_bool('CORS_ALLOW_CREDENTIALS', False)
     CORS_ALLOW_ORIGINS = [
@@ -224,20 +200,7 @@ def post(url: str, **kwargs: Any) -> requests.Response:
     # connection-establishment limit.
     kwargs.setdefault('timeout', (Cfg.CONNECT_TIMEOUT, Cfg.REQUEST_TIMEOUT))
 
-    payload_preview: Dict[str, Any] = {}
-    for key in ('json', 'data'):
-        if key in kwargs and kwargs[key] is not None:
-            payload_preview[key] = _summarize_payload(kwargs[key])
-
-    if 'files' in kwargs and kwargs['files'] is not None:
-        payload_preview['files'] = list(kwargs['files'].keys())
-
-    logger.info(
-        "[IO][HTTP][OUTBOUND] POST %s opts=%s payload=%s",
-        url,
-        {'timeout': kwargs.get('timeout')},
-        payload_preview,
-    )
+    logger.info('[HTTP OUTBOUND] provider=%s', urlsplit(url).hostname)
 
     try:
         response = session.post(url, **kwargs)
@@ -260,18 +223,11 @@ def raise_for_upstream(response: requests.Response, provider_name: str) -> None:
     if response.ok:
         return
 
-    detail = None
-    try:
-        payload = response.json()
-        detail = payload.get('detail') if isinstance(payload, dict) else payload
-    except Exception:
-        detail = response.text[:500] if response.text else None
-
     logger.error(
         '[%s ERROR] status=%s detail=%s',
         provider_name,
         response.status_code,
-        _summarize_payload(detail),
+        'redacted',
     )
 
     raise HTTPException(
@@ -347,8 +303,8 @@ def _looks_like_noise(text: str, whisper_payload: Dict[str, Any]) -> bool:
     return False
 
 
-@lru_cache(maxsize=Cfg.MAX_CACHE_SIZE)
 def translate_text_cached(text: str, lang: str) -> str:
+    """Legacy helper name; deliberately no shared cache of conversation content."""
     lang = _sanitize_lang(lang)
     lang_prompt = LANG_NAME.get(lang, lang)
 
@@ -382,7 +338,7 @@ def translate_text_cached(text: str, lang: str) -> str:
     try:
         content = data['choices'][0]['message']['content']
     except (KeyError, IndexError, TypeError) as exc:
-        logger.error('Unexpected translation response format: %s', _summarize_payload(data))
+        logger.error('Unexpected translation response format')
         raise HTTPException(status_code=502, detail='Invalid translation response format') from exc
 
     return _normalize_text(content)
@@ -415,8 +371,9 @@ def build_translations(text: str, detected_lang: str, primary_lang: str, target_
             if first_error is None:
                 first_error = exc
         except Exception:
-            logger.exception('[TRANSLATION ERROR target=%s]', lang)
-            result[f'translation_{lang}'] = text
+            logger.error('[TRANSLATION ERROR target=%s]', lang)
+            if first_error is None:
+                first_error = HTTPException(status_code=502, detail='Réponse du service de traduction invalide')
 
     if first_error is not None:
         raise first_error
@@ -491,7 +448,7 @@ def process_audio_chunk(
 
     transcription = _normalize_text(whisper_payload.get('text', ''))
     if transcription and _looks_like_noise(transcription, whisper_payload):
-        logger.info("[WHISPER] filtered probable noise transcript: %r", transcription)
+        logger.info('[WHISPER] filtered probable noise transcript')
         transcription = ''
 
     detected_lang = ''
@@ -531,8 +488,8 @@ def detect_language(text: str) -> str:
 
 # ────────────────────────────── API models ──────────────────────────────
 class TextTranslationRequest(BaseModel):
-    text: str = Field(..., description='Text to translate')
-    target_lang: str = Field('fr', description='BCP-47 code of the desired translation language')
+    text: str = Field(..., min_length=1, max_length=20000, description='Text to translate')
+    target_lang: str = Field('fr', max_length=35, pattern=r'^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$', description='BCP-47 language')
 
 
 class TextTranslationResponse(BaseModel):
@@ -546,16 +503,10 @@ class UploadResponse(BaseModel):
 
 
 
-def require_api_token(request: Request) -> None:
-    if not Cfg.TRANSLATE_RT_API_TOKEN:
-        return
-
-    expected = f'Bearer {Cfg.TRANSLATE_RT_API_TOKEN}'
-    if request.headers.get('authorization') != expected:
-        raise HTTPException(status_code=401, detail='Invalid or missing API token')
-
 # ────────────────────────────── FastAPI app ──────────────────────────────
 app = FastAPI()
+# Register guards before CORS so preflight responses are handled outside auth.
+app.add_middleware(RequestGuards, token=Cfg.TRANSLATE_RT_API_TOKEN)
 
 app.add_middleware(
     CORSMiddleware,
@@ -565,14 +516,6 @@ app.add_middleware(
     allow_methods=['*'],
     allow_headers=['*'],
 )
-
-
-@app.middleware('http')
-async def api_token_middleware(request: Request, call_next):
-    public_paths = {'/healthz', '/docs', '/redoc', '/openapi.json'}
-    if Cfg.TRANSLATE_RT_API_TOKEN and request.url.path not in public_paths:
-        require_api_token(request)
-    return await call_next(request)
 
 
 @app.get('/healthz')
@@ -585,6 +528,9 @@ def tts_proxy(payload: Dict[str, Any] = Body(...)) -> Response:
     if not Cfg.TTS_API_KEY:
         raise HTTPException(status_code=503, detail='TTS is not configured')
 
+    if not isinstance(payload.get('input'), str) or not 0 < len(payload['input']) <= 20000:
+        raise HTTPException(status_code=422, detail='Le texte TTS doit contenir entre 1 et 20000 caractères')
+
     response = post(
         Cfg.TTS_URL,
         headers={
@@ -595,16 +541,10 @@ def tts_proxy(payload: Dict[str, Any] = Body(...)) -> Response:
     )
 
     if not response.ok:
-        detail = None
-        try:
-            detail = response.json()
-        except Exception:
-            detail = response.text[:500] if response.text else None
-
         logger.error(
             '[TTS ERROR] status=%s detail=%s',
             response.status_code,
-            _summarize_payload(detail),
+            'redacted',
         )
 
         return JSONResponse(
@@ -632,7 +572,7 @@ def translate_text_endpoint(payload: TextTranslationRequest) -> TextTranslationR
     except HTTPException:
         raise
     except Exception as exc:
-        logger.exception('[TRANSLATE TEXT ERROR]')
+        logger.error('[TRANSLATE TEXT ERROR]')
         raise HTTPException(status_code=502, detail='Translation provider error') from exc
 
     return TextTranslationResponse(translation=translation)
@@ -641,8 +581,8 @@ def translate_text_endpoint(payload: TextTranslationRequest) -> TextTranslationR
 @app.post('/upload')
 def upload(
     file: UploadFile = File(...),
-    target_lang: str = Form('fr'),
-    primary_lang: str = Form('fr'),
+    target_lang: str = Form('fr', max_length=35, pattern=r'^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$'),
+    primary_lang: str = Form('fr', max_length=35, pattern=r'^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$'),
 ) -> Dict[str, Any]:
     if not file:
         raise HTTPException(status_code=400, detail='No file provided')
@@ -657,9 +597,12 @@ def upload(
     # handlers to a worker thread, so the blocking `requests` round-trips
     # below no longer stall the event loop (and every other request with it).
     try:
-        contents = file.file.read()
+        contents = file.file.read(int(os.getenv('MAX_AUDIO_BYTES', str(10 * 1024 * 1024))) + 1)
     finally:
         file.file.close()
+
+    if len(contents) > int(os.getenv('MAX_AUDIO_BYTES', str(10 * 1024 * 1024))):
+        raise HTTPException(status_code=413, detail='Fichier audio trop volumineux')
 
     if not contents:
         raise HTTPException(status_code=400, detail='Uploaded file is empty')
@@ -682,12 +625,8 @@ def upload(
     except HTTPException:
         raise
     except Exception:
-        logger.exception('[WHISPER ERROR]')
-        return {
-            'transcription': '',
-            'detected_lang': '',
-            'diarization': {},
-        }
+        logger.error('[WHISPER] invalid upstream response')
+        raise HTTPException(status_code=502, detail='Réponse du service audio invalide')
 
 
 # ────────────────────────────── Entrypoint ──────────────────────────────

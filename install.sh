@@ -24,10 +24,10 @@ fi
 
 "${UV_BIN}" venv --python "${PYTHON_BIN}" "${VENV_DIR}"
 "${UV_BIN}" pip install --python "${VENV_DIR}/bin/python" --upgrade pip wheel
-"${UV_BIN}" pip install --python "${VENV_DIR}/bin/python" -r requirements.txt
+"${UV_BIN}" pip install --python "${VENV_DIR}/bin/python" --require-hashes -r requirements.lock
 
 if [[ -f "api-translate-rt/requirements.txt" ]]; then
-  "${UV_BIN}" pip install --python "${VENV_DIR}/bin/python" -r api-translate-rt/requirements.txt
+  "${UV_BIN}" pip install --python "${VENV_DIR}/bin/python" --require-hashes -r api-translate-rt/requirements.lock
 fi
 
 echo "Installed ${PROJECT_NAME} into ${VENV_DIR}"
