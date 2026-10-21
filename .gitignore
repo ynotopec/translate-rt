@@ -47,8 +47,23 @@ Thumbs.db
 #*.ftz
 # uv / local tooling
 .venv/
-uv.lock
 
 # Logs and runtime files
 *.log
 *.pid
+
+# Secrets and local audit output
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa*
+id_ed25519*
+*kubeconfig*
+*.tfstate*
+private/
+secrets/
+.pytest_cache/
+.ruff_cache/

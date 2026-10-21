@@ -9,3 +9,5 @@ flask-cors
 requests
 opuslib
 numpy
+
+gunicorn>=23,<24

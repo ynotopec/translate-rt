@@ -8,7 +8,7 @@ Minimal real-time translation stack:
 
 ## Requirements
 
-* Python 3.10+
+* Python 3.12 (tested)
 * `uv` (installed automatically by `install.sh` when missing)
 * `ffmpeg` on `PATH` for audio conversion/provider compatibility
 * API tokens configured in `.env`
@@ -54,7 +54,7 @@ TRANSLATE_RT_API_HOST=api-translate-rt.ailab.infocepo.com
 TRANSLATE_RT_API_BASE=${TRANSLATE_RT_API_SCHEME}://${TRANSLATE_RT_API_HOST}
 ```
 
-Set `TRANSLATE_RT_API_TOKEN` to require `Authorization: Bearer <token>` on backend API routes. The Flask frontend builds browser-facing calls from `TRANSLATE_RT_API_BASE`, so `/upload` resolves to `${TRANSLATE_RT_API_BASE}/upload`.
+Set `TRANSLATE_RT_API_TOKEN` to require `Authorization: Bearer <token>` on backend API routes. Flask uses `TRANSLATE_RT_API_BASE` server-side; browser requests stay on the frontend origin.
 
 ## Popular API endpoints
 
@@ -86,3 +86,77 @@ WorkingDirectory=/opt/translate-rt/api-translate-rt
 ExecStart=/bin/bash -lc './run.sh 0.0.0.0 8080'
 Restart=always
 ```
+
+## Security and deployment
+
+The bundled browser now calls `/api/upload` and `/api/tts-proxy` on **the Flask origin**.
+Flask forwards the request and adds `TRANSLATE_RT_API_TOKEN` on the server; this token
+is never delivered in HTML or JavaScript. Existing `TRANSLATE_RT_*_URL` overrides
+still select the upstream destination, but the Flask host must now reach it.
+Configure the same strong token in both services. Direct API clients continue to
+use `Authorization: Bearer <token>` on the existing routes.
+
+The frontend is a proxy, **not a user identity provider**. Before exposing it,
+protect the Flask origin with your reverse proxy/SSO and keep the backend private.
+The `X-Translate-RT: 1` header and origin checks prevent browser cross-origin
+submission; they do not authenticate a user or stop direct HTTP clients.
+Do not enable cross-origin access on Flask. Behind a TLS-terminating proxy, set
+`FRONTEND_PUBLIC_ORIGIN=https://your-public-host` to the exact external origin
+(no path), preserve the Host header and restrict incoming hosts at the proxy.
+Never trust arbitrary forwarded headers from the public network.
+
+Defaults, configurable through environment variables:
+
+| Setting | Default | Scope |
+| --- | --- | --- |
+| `MAX_REQUEST_BYTES` | 12582912 (12 MiB) | Flask and API request body |
+| `MAX_AUDIO_BYTES` | 10485760 (10 MiB) | API uploaded audio |
+| `MAX_CONCURRENT_REQUESTS` | 32 | API requests per worker |
+| `MAX_REQUESTS_PER_MINUTE` | 1200 | API requests per worker, shared across clients |
+| `PROXY_READ_TIMEOUT` | 120 seconds | Flask upstream read timeout |
+
+API limits reject excess demand with 413/429, including bodies sent without
+Content-Length. Health and documentation routes are exempt. Use the ingress for
+shared quotas, per-user limits, connection limits and slow-upload timeouts across
+workers/replicas. Text and TTS input are capped at 20,000 characters.
+
+Translation caching has been removed: `MAX_CACHE_SIZE` no longer has an effect.
+Repeated phrases now call the provider again. Application logs omit payloads and
+provider error bodies. There is no application database or stored recording;
+provider retention and infrastructure logs must be assessed separately. The browser
+keeps transcript results in memory; downloaded exports remain on the user's device.
+
+### Container (Python 3.12)
+
+```bash
+# Create api-translate-rt/.env from its example and set provider credentials.
+export TRANSLATE_RT_API_TOKEN="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
+docker compose up --build
+```
+
+Set `FRONTEND_PUBLIC_ORIGIN` in the frontend service environment when using a
+public HTTPS origin. Compose binds the frontend to localhost only and does not
+publish the API. The image runs non-root, supports an arbitrary non-root UID and
+uses read-only roots with temporary files in `/tmp`. The image has no embedded
+credentials. Set memory/CPU limits in your deployment and use TLS at ingress.
+No Kubernetes manifest or claim of production homologation is supplied.
+
+### Verification
+
+```bash
+python -m pip install --require-hashes -r requirements.lock -r api-translate-rt/requirements.lock
+python -m pip install pytest httpx
+python -m pytest -q api-translate-rt/tests
+node --test tests/frontend.test.cjs
+```
+
+CI runs regression tests, basic Python lint, a dependency audit, Gitleaks and a
+container build/Trivy scan. Enable the versioned local secret hook with
+`pre-commit install` after installing pre-commit. Dependency lockfiles contain
+hashes; refresh them deliberately with `uv pip compile --generate-hashes`.
+The install scripts also consume these locks, while requirements.txt remains the
+human-maintained constraint input.
+
+The DSFR fixes are not a complete RGAA audit. The information sections in the UI
+identify what the operator still needs to complete (editor, hosting, providers,
+retention and rights contact); complete them before public use.
