@@ -4,7 +4,13 @@ services:
     image: translate-rt:local
     ports: ["127.0.0.1:5000:5000"]
     environment:
-      TRANSLATE_RT_API_BASE: http://api:8080
+      TRANSLATE_RT_API_BASE: ${TRANSLATE_RT_API_BASE:-http://api:8080}
+      FRONTEND_PUBLIC_ORIGIN: ${FRONTEND_PUBLIC_ORIGIN:-}
+      FRONTEND_AUTH_MODE: ${FRONTEND_AUTH_MODE:-basic}
+      FRONTEND_AUTH_USER: ${FRONTEND_AUTH_USER:-}
+      FRONTEND_AUTH_PASSWORD_HASH: ${FRONTEND_AUTH_PASSWORD_HASH:-}
+      SECURITY_CONTACT: ${SECURITY_CONTACT:-}
+      SECURITY_EXPIRES: ${SECURITY_EXPIRES:-}
       TRANSLATE_RT_API_TOKEN: ${TRANSLATE_RT_API_TOKEN:?Set a shared API token}
     read_only: true
     tmpfs: ["/tmp:size=32m"]

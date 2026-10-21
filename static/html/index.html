@@ -655,7 +655,7 @@
 
 
 <!-- Configuration API injectée par Flask -->
-<script>
+<script nonce="{{ g.csp_nonce }}">
   window.TRANSLATE_RT_CONFIG = {{ translate_rt_config|tojson }};
 </script>
 
@@ -669,7 +669,7 @@
 -->
     
     <!-- Script pour l'interface -->
-    <script>
+    <script nonce="{{ g.csp_nonce }}">
 document.addEventListener('DOMContentLoaded', () => {
     // === Gestion Enregistrement ===
     const recordButton = document.getElementById('recordButton');
@@ -905,7 +905,7 @@ srOnlyStyle.textContent = `
 `;
 document.head.appendChild(srOnlyStyle);
     </script>
-<script>
+<script nonce="{{ g.csp_nonce }}">
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
     navigator.serviceWorker.register('/static/installation/service-worker.js')

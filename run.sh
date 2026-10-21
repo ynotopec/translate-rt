@@ -33,11 +33,12 @@ if [[ -n "${portNumber}" ]]; then
 fi
 
 export HF_HUB_DISABLE_TELEMETRY="${HF_HUB_DISABLE_TELEMETRY:-1}"
-export SERVER_NAME="${SERVER_NAME:-0.0.0.0}"
+export SERVER_NAME="${SERVER_NAME:-127.0.0.1}"
 export SERVER_PORT="${SERVER_PORT:-5000}"
 
+args=(--bind "${SERVER_NAME}:${SERVER_PORT}" --workers "${GUNICORN_WORKERS:-2}" --threads "${GUNICORN_THREADS:-4}" --timeout "${GUNICORN_TIMEOUT:-180}" app:app)
 if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then
-  python app.py
+  "${VENV_DIR}/bin/gunicorn" "${args[@]}"
 else
-  exec python app.py
+  exec "${VENV_DIR}/bin/gunicorn" "${args[@]}"
 fi

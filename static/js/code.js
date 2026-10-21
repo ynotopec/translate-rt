@@ -796,7 +796,9 @@
       if (!DOM.primaryLangSelect || !DOM.langSelect) return;
       const currentPrimary = DOM.primaryLangSelect.value || 'fr';
 
-      DOM.primaryLangSelect.innerHTML = DOM.langSelect.innerHTML;
+      DOM.primaryLangSelect.replaceChildren(
+        ...Array.from(DOM.langSelect.options, option => option.cloneNode(true))
+      );
 
       if ([...DOM.primaryLangSelect.options].some(o => o.value === currentPrimary)) {
         DOM.primaryLangSelect.value = currentPrimary;

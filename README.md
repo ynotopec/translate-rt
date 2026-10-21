@@ -96,8 +96,9 @@ still select the upstream destination, but the Flask host must now reach it.
 Configure the same strong token in both services. Direct API clients continue to
 use `Authorization: Bearer <token>` on the existing routes.
 
-The frontend is a proxy, **not a user identity provider**. Before exposing it,
-protect the Flask origin with your reverse proxy/SSO and keep the backend private.
+The frontend provides Basic authentication by default (see Production hardening below).
+For a managed SSO deployment, explicitly select proxy mode and protect the entire
+Flask origin at your reverse proxy. Keep the backend private.
 The `X-Translate-RT: 1` header and origin checks prevent browser cross-origin
 submission; they do not authenticate a user or stop direct HTTP clients.
 Do not enable cross-origin access on Flask. Behind a TLS-terminating proxy, set
@@ -160,3 +161,73 @@ human-maintained constraint input.
 The DSFR fixes are not a complete RGAA audit. The information sections in the UI
 identify what the operator still needs to complete (editor, hosting, providers,
 retention and rights contact); complete them before public use.
+
+## Production hardening (follow-up to the audit)
+
+**Migration:** the frontend now defaults to Basic authentication. Until the user
+and password hash are configured, it returns **503** instead of silently opening
+the proxy to anonymous callers. The backend API token is separate from this user
+credential and stays on the server. No new Python dependency is needed.
+
+Generate a password hash interactively inside the installed virtual environment:
+
+```bash
+python -c 'import getpass,shlex; from werkzeug.security import generate_password_hash; print("FRONTEND_AUTH_PASSWORD_HASH=" + shlex.quote(generate_password_hash(getpass.getpass("Password: "))))'
+```
+
+Copy the output into the frontend `.env` (preserve the quotes), then set:
+
+```dotenv
+FRONTEND_AUTH_MODE=basic
+FRONTEND_AUTH_USER=your-user
+FRONTEND_PUBLIC_ORIGIN=https://app.example.com
+TRANSLATE_RT_API_BASE=https://api-app.example.com
+```
+
+Use the same `TRANSLATE_RT_API_TOKEN` in Flask and FastAPI. The browser calls
+`app.example.com/api/*`; Flask calls `api-app.example.com` server-side. The
+external frontend origin must be set explicitly when TLS is terminated upstream.
+Compose now forwards that variable, including authentication settings, into Flask.
+A blank origin falls back to the directly observed request origin; forwarded
+headers are not trusted automatically. A 403 origin error describes which setting
+to check. Restart/recreate services after changing their environment.
+
+If SSO already protects the entire frontend, set `FRONTEND_AUTH_MODE=proxy` and
+ensure no direct path to the upstream bypasses SSO. For an intentional local demo,
+`FRONTEND_AUTH_MODE=none` disables user authentication; the API token alone does
+not protect that public frontend proxy. Do not choose this mode for a private service.
+
+`run.sh` now launches Gunicorn and binds `127.0.0.1` by default. Explicit IP/port
+arguments still work; use `0.0.0.0` only on an isolated container/private interface.
+See `deploy/translate-rt.service` for a systemd example. Provision the service
+user and virtual environment first; do not depend on auto-installation at boot.
+
+`deploy/nginx.conf` is a standalone example, not an auto-applied configuration.
+Adapt both hostnames, the upstream ports and TLS certificate paths; certificates
+must cover both names. If your existing Nginx terminates TLS, merge only the relevant
+server/location settings. Validate with `nginx -t` before reloading. It provides:
+
+- HTTP to HTTPS **308** (preserves POST methods), HSTS without includeSubDomains;
+- per-IP request/connection limits and read/header/body timeouts;
+- hidden upstream Server banner and no Nginx version number (`Server: nginx` remains);
+- no request bodies, query strings or Authorization headers in access logs.
+
+Do not change the whole domain's HSTS scope or enable preload without checking
+other services. When another load balancer precedes Nginx, configure trusted real-IP
+sources explicitly before relying on per-IP limits. Do not accept arbitrary
+X-Forwarded-For values from public clients. Keep API 8080 private even if its public
+subdomain is retained; enable the shared token for direct clients.
+
+Flask now emits security headers on successful and error responses, including a
+CSP with a fresh nonce for each HTML response, frame-ancestors none, nosniff,
+no-referrer, microphone restricted to self, COOP and CORP. CSP allows only the
+pinned DSFR CDN path for scripts/styles/fonts, same-origin fetch and blob audio.
+Inline script execution requires a nonce; inline styles remain allowed for the
+existing DSFR/dynamic UI. Dynamic responses are no-store. HSTS is emitted for
+HTTPS or an explicitly configured HTTPS public origin; the redirect itself belongs
+to Nginx. Backend direct documentation is separate from the frontend CSP.
+
+Configure the real disclosure contact and expiration described in SECURITY.md to
+publish security.txt; no owner contact is fabricated. The PWA display mode is
+unchanged. Copying language options uses cloned DOM nodes instead of innerHTML.
+These controls do not constitute an RGAA audit or a production homologation.
