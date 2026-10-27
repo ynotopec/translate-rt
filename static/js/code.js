@@ -656,10 +656,13 @@
       const identifier = rawIdentifier ? String(rawIdentifier).slice(-4) : '';
 
       const targetLang = DOM.langSelect?.value || 'fr';
+      const primaryLang = DOM.primaryLangSelect?.value || 'fr';
 
-      // If speech is already in the target language, keep the original.
-      const tradKeys = result.detected_lang === targetLang
-        ? [] : [`translation_${targetLang}`];
+      // Translate back to the primary language when the other person speaks
+      // the destination language; otherwise translate towards the destination.
+      const outputLang = result.detected_lang === targetLang ? primaryLang : targetLang;
+      const tradKeys = result.detected_lang === outputLang
+        ? [] : [`translation_${outputLang}`];
       const translated = tradKeys.map(k => result?.[k]).find(Boolean) || transcription;
 
       const phraseForTTS = (translated && translated !== transcription) ? translated : null;
