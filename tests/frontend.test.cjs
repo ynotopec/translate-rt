@@ -18,10 +18,10 @@ function render(result, target = 'es', primary = 'fr') {
   return rendered;
 }
 
-test('destination takes precedence over primary language', () => {
+test('third language is translated to primary even when destination is available', () => {
   const result = render({ transcription: 'Hello', detected_lang: 'en', translation_fr: 'Bonjour', translation_es: 'Hola' });
-  assert.equal(result.translated, 'Hola');
-  assert.equal(result.ttsText, 'Hola');
+  assert.equal(result.translated, 'Bonjour');
+  assert.equal(result.ttsText, 'Bonjour');
 });
 test('primary language is translated towards destination with TTS', () => {
   const result = render({ transcription: 'Bonjour', detected_lang: 'fr', translation_es: 'Hola' });
@@ -48,6 +48,18 @@ test('identical selected languages preserve original without TTS', () => {
   assert.equal(result.translated, 'Bonjour');
   assert.equal(result.ttsText, null);
 });
-test('missing destination never silently selects another language', () => {
-  assert.equal(render({ transcription: 'Hello', translation_fr: 'Bonjour' }).translated, 'Hello');
+test('unidentified language is translated to primary', () => {
+  const result = render({ transcription: 'Hello', translation_fr: 'Bonjour', translation_es: 'Hola' });
+  assert.equal(result.translated, 'Bonjour');
+  assert.equal(result.ttsText, 'Bonjour');
+});
+test('missing destination for primary speech preserves original', () => {
+  const result = render({ transcription: 'Bonjour', detected_lang: 'fr', translation_fr: 'Bonjour' });
+  assert.equal(result.translated, 'Bonjour');
+  assert.equal(result.ttsText, null);
+});
+test('missing primary translation for third language preserves original', () => {
+  const result = render({ transcription: 'Hello', detected_lang: 'en', translation_es: 'Hola' });
+  assert.equal(result.translated, 'Hello');
+  assert.equal(result.ttsText, null);
 });

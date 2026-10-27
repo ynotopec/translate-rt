@@ -17,8 +17,8 @@ The project is CPU-safe by default and does not pin CUDA libraries, so the same 
 
 Translation is bidirectional between the selected primary and destination
 languages: speech in the primary language is translated to the destination,
-and speech in the destination language is translated back to the primary.
-Speech in a third or unidentified language uses the destination. Display and
+and speech in any other language is translated to the primary.
+Speech in an unidentified language also uses the primary. Display and
 TTS use the same translation; if it is missing, the original text is displayed.
 
 ## Quick start

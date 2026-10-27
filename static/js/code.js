@@ -658,9 +658,9 @@
       const targetLang = DOM.langSelect?.value || 'fr';
       const primaryLang = DOM.primaryLangSelect?.value || 'fr';
 
-      // Translate back to the primary language when the other person speaks
-      // the destination language; otherwise translate towards the destination.
-      const outputLang = result.detected_lang === targetLang ? primaryLang : targetLang;
+      // Primary-language speech goes to the destination; every other language
+      // goes to the primary language, including an unidentified source.
+      const outputLang = result.detected_lang === primaryLang ? targetLang : primaryLang;
       const tradKeys = result.detected_lang === outputLang
         ? [] : [`translation_${outputLang}`];
       const translated = tradKeys.map(k => result?.[k]).find(Boolean) || transcription;
