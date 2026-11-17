@@ -23,7 +23,9 @@ class RequestGuards:
         await JSONResponse({'detail': message}, status_code=status)(scope, receive, send)
 
     async def __call__(self, scope, receive, send):
-        if scope['type'] != 'http' or scope['path'] in {'/healthz', '/docs', '/redoc', '/openapi.json'}:
+        # Only the liveness probe is public. /docs, /redoc and /openapi.json
+        # publish the whole route table and stay behind the token.
+        if scope['type'] != 'http' or scope['path'] in {'/healthz'}:
             return await self.app(scope, receive, send)
         headers = dict(scope['headers'])
         expected = f'Bearer {self.token}'.encode()
