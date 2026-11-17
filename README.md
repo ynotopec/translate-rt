@@ -54,13 +54,13 @@ OPENAI_API_SCHEME=https
 OPENAI_API_HOST=api.openai.com
 OPENAI_API_BASE=${OPENAI_API_SCHEME}://${OPENAI_API_HOST}/v1
 #OPENAI_API_MODEL=gpt-4o-mini
-#TRANSLATE_RT_API_TOKEN=change-me
+TRANSLATE_RT_API_TOKEN=replace-with-a-strong-shared-token
 TRANSLATE_RT_API_SCHEME=https
 TRANSLATE_RT_API_HOST=api-translate-rt.ailab.infocepo.com
 TRANSLATE_RT_API_BASE=${TRANSLATE_RT_API_SCHEME}://${TRANSLATE_RT_API_HOST}
 ```
 
-Set `TRANSLATE_RT_API_TOKEN` to require `Authorization: Bearer <token>` on backend API routes. Flask uses `TRANSLATE_RT_API_BASE` server-side; browser requests stay on the frontend origin.
+`TRANSLATE_RT_API_TOKEN` is required: use the same strong token on Flask and FastAPI. Backend API routes require `Authorization: Bearer <token>`. Flask uses `TRANSLATE_RT_API_BASE` server-side; browser requests stay on the frontend origin.
 
 ## Popular API endpoints
 
@@ -133,6 +133,17 @@ slow-upload timeouts across workers/replicas. Text and TTS input are capped at
 an unset token used to disable authentication entirely. The API also rejects
 `model`, `voice` and `response_format` values that are not on its allow-list, so
 a caller cannot select an arbitrary provider option on your account.
+
+`TTS_ALLOWED_MODELS` and `TTS_ALLOWED_VOICES` are comma-separated lists of exact
+allowed values, defaulting to `gpt-4o-mini-tts` and `alloy` used by the bundled
+frontend. Configure them on the API service when approving other provider options;
+empty lists and `*` are rejected. Invalid option types return 422 before any
+provider call.
+
+With `CORS_ALLOW_CREDENTIALS=true`, use `CORS_ALLOW_ORIGINS` with explicit origins
+or domain suffix entries such as `https://.example.com`. Wildcard origins and
+custom `CORS_ALLOW_ORIGIN_REGEX` are rejected; custom regexes remain available
+without credentials and are checked for valid syntax at startup.
 
 Translation caching has been removed: `MAX_CACHE_SIZE` no longer has an effect.
 Repeated phrases now call the provider again. Application logs omit payloads and

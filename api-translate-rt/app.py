@@ -58,14 +58,11 @@ def _is_small_audio(data: bytes) -> bool:
     return len(data) < 16_000
 
 
-# Provider selector values (model, voice) are matched against an allow-list
-# pattern so a caller cannot name an arbitrary, possibly costly, upstream
-# option. Narrow by design: extend the pattern when a new option is offered.
-_PROVIDER_OPTION_RE = re.compile(r'^[a-z0-9][a-z0-9._:-]{0,63}$')
-
-
-def _is_safe_provider_option(value: Any) -> bool:
-    return isinstance(value, str) and bool(_PROVIDER_OPTION_RE.fullmatch(value))
+def _env_allowlist(name: str, default: str) -> frozenset[str]:
+    values = frozenset(value.strip() for value in os.getenv(name, default).split(',') if value.strip())
+    if not values or '*' in values:
+        raise RuntimeError(f'{name} must contain explicit allowed values')
+    return values
 
 
 def _guess_content_type(upload: UploadFile, filename: str) -> str:
@@ -118,6 +115,8 @@ class Cfg:
     DIAR_TOKEN = os.getenv('DIARIZATION_TOKEN')
 
     TTS_API_KEY = os.getenv('TTS_API_KEY')
+    TTS_ALLOWED_MODELS = _env_allowlist('TTS_ALLOWED_MODELS', 'gpt-4o-mini-tts')
+    TTS_ALLOWED_VOICES = _env_allowlist('TTS_ALLOWED_VOICES', 'alloy')
     TTS_URL = os.getenv(
         'TTS_API_URL',
         f'{AI_DEV_API_SCHEME}://api-txt2audio.{AI_DEV_API_DOMAIN}/v1/audio/speech',
@@ -190,19 +189,21 @@ if not Cfg.TRANSLATE_RT_API_TOKEN:
 if missing_env:
     raise RuntimeError(f"Missing mandatory env variable(s): {', '.join(missing_env)}")
 
-# Credentialed CORS may never resolve to "any origin": a regex such as `.*`
-# matches every site once Starlette calls fullmatch(). Test the *runtime* regex
-# against a host that must never be allowed instead of comparing raw strings.
-if Cfg.CORS_ALLOW_CREDENTIALS:
+# Validate syntax even without credentials, so invalid regexes fail at startup.
+if ALLOW_ORIGIN_REGEX:
     try:
-        wildcard_regex = bool(ALLOW_ORIGIN_REGEX) and re.fullmatch(ALLOW_ORIGIN_REGEX, 'https://evil.invalid')
+        re.compile(ALLOW_ORIGIN_REGEX)
     except re.error as exc:
         raise RuntimeError(f'Invalid CORS_ALLOW_ORIGIN_REGEX: {exc}') from exc
-    if '*' in ALLOW_ORIGINS or wildcard_regex:
-        raise RuntimeError(
-            'Invalid CORS configuration: CORS_ALLOW_CREDENTIALS=true cannot be used '
-            'with a wildcard origin or a regex matching arbitrary hosts'
-        )
+
+# Arbitrary regexes cannot be proven safe by testing a sample origin. With
+# credentials, accept explicit origins and only our escaped domain patterns.
+if Cfg.CORS_ALLOW_CREDENTIALS and ('*' in ALLOW_ORIGINS or Cfg.CORS_ALLOW_ORIGIN_REGEX):
+    raise RuntimeError(
+        'Invalid CORS configuration: CORS_ALLOW_CREDENTIALS=true requires '
+        'explicit CORS_ALLOW_ORIGINS (domain suffixes such as https://.example.com '
+        'are supported), without * or CORS_ALLOW_ORIGIN_REGEX'
+    )
 
 # ────────────────────────────── HTTP session ──────────────────────────────
 session = requests.Session()
@@ -562,11 +563,18 @@ def tts_proxy(payload: Dict[str, Any] = Body(...)) -> Response:
     # operator's account by adding keys to the JSON body.
     allowed_fields = ('input', 'model', 'voice', 'instructions', 'response_format')
     forwarded = {key: payload[key] for key in allowed_fields if key in payload}
-    if 'model' in forwarded and not _is_safe_provider_option(forwarded['model']):
+    if 'model' in forwarded and (
+        not isinstance(forwarded['model'], str) or forwarded['model'] not in Cfg.TTS_ALLOWED_MODELS
+    ):
         raise HTTPException(status_code=422, detail='Paramètre model invalide')
-    if 'voice' in forwarded and not _is_safe_provider_option(forwarded['voice']):
+    if 'voice' in forwarded and (
+        not isinstance(forwarded['voice'], str) or forwarded['voice'] not in Cfg.TTS_ALLOWED_VOICES
+    ):
         raise HTTPException(status_code=422, detail='Paramètre voice invalide')
-    if 'response_format' in forwarded and forwarded['response_format'] not in {'mp3', 'opus', 'aac', 'flac', 'wav', 'pcm'}:
+    if 'response_format' in forwarded and (
+        not isinstance(forwarded['response_format'], str)
+        or forwarded['response_format'] not in {'mp3', 'opus', 'aac', 'flac', 'wav', 'pcm'}
+    ):
         raise HTTPException(status_code=422, detail='Paramètre response_format invalide')
 
     response = post(

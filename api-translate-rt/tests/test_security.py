@@ -233,7 +233,7 @@ def _load_api_with_env(monkeypatch, **env):
     only way to assert on startup validation.
     """
     for key in ('TRANSLATE_RT_API_TOKEN', 'CORS_ALLOW_ORIGINS', 'CORS_ALLOW_ORIGIN_REGEX',
-                'CORS_ALLOW_CREDENTIALS'):
+                'CORS_ALLOW_CREDENTIALS', 'TTS_ALLOWED_MODELS', 'TTS_ALLOWED_VOICES'):
         monkeypatch.delenv(key, raising=False)
     for key, value in env.items():
         monkeypatch.setenv(key, value)
@@ -324,3 +324,88 @@ def test_tts_rejects_unknown_provider_options(client, monkeypatch, field, value)
         status = client.post('/tts-proxy', json={'input': 'bonjour', field: value}).status_code
     assert status == 422
     post.assert_not_called()
+
+
+@pytest.mark.parametrize('field,value', [
+    ('model', 'unapproved-expensive-model'), ('voice', 'unapproved-voice'),
+    ('model', []), ('voice', {}),
+    ('response_format', []), ('response_format', {}),
+    ('response_format', None), ('response_format', 1),
+])
+def test_tts_rejects_unapproved_or_malformed_options(client, monkeypatch, field, value):
+    monkeypatch.setattr(api.Cfg, 'TTS_API_KEY', 'fixture')
+    upstream = Mock(ok=True, content=b'audio', status_code=200, headers={'Content-Type': 'audio/opus'})
+    with patch.object(api, 'post', return_value=upstream) as post:
+        response = client.post('/tts-proxy', json={'input': 'bonjour', field: value})
+    assert response.status_code == 422
+    post.assert_not_called()
+
+
+def test_tts_configured_allowlists(monkeypatch):
+    module = _load_api_with_env(
+        monkeypatch, TRANSLATE_RT_API_TOKEN='t',
+        TTS_ALLOWED_MODELS=' Vendor/Custom-TTS , gpt-4o-mini-tts ',
+        TTS_ALLOWED_VOICES=' CustomVoice , alloy ',
+    )
+    monkeypatch.setattr(module.Cfg, 'TTS_API_KEY', 'fixture')
+    payload = {'input': 'bonjour', 'model': 'Vendor/Custom-TTS', 'voice': 'CustomVoice'}
+    upstream = Mock(ok=True, content=b'audio', status_code=200, headers={'Content-Type': 'audio/opus'})
+    with TestClient(module.app, headers={'Authorization': 'Bearer t'}) as client:
+        with patch.object(module, 'post', return_value=upstream) as post:
+            assert client.post('/tts-proxy', json=payload).status_code == 200
+            assert post.call_args.kwargs['json'] == payload
+            post.reset_mock()
+            assert client.post('/tts-proxy', json={**payload, 'model': 'other-model'}).status_code == 422
+            assert client.post('/tts-proxy', json={**payload, 'voice': 'other-voice'}).status_code == 422
+            post.assert_not_called()
+
+
+@pytest.mark.parametrize('setting', ['TTS_ALLOWED_MODELS', 'TTS_ALLOWED_VOICES'])
+@pytest.mark.parametrize('value', ['', '*'])
+def test_tts_allowlists_fail_closed(monkeypatch, setting, value):
+    with pytest.raises(RuntimeError, match=setting):
+        _load_api_with_env(monkeypatch, TRANSLATE_RT_API_TOKEN='t', **{setting: value})
+
+
+@pytest.mark.parametrize('pattern', [r'http://.*', r'https://(?!evil\.invalid).*', r'https://app\.example\.com'])
+def test_credentialed_cors_rejects_custom_regexes(monkeypatch, pattern):
+    with pytest.raises(RuntimeError, match='CORS'):
+        _load_api_with_env(
+            monkeypatch, TRANSLATE_RT_API_TOKEN='t',
+            CORS_ALLOW_CREDENTIALS='true', CORS_ALLOW_ORIGIN_REGEX=pattern,
+        )
+
+
+def test_cors_domain_suffix_with_credentials(monkeypatch):
+    module = _load_api_with_env(
+        monkeypatch, TRANSLATE_RT_API_TOKEN='t', CORS_ALLOW_CREDENTIALS='true',
+        CORS_ALLOW_ORIGINS='https://.example.com',
+    )
+    with TestClient(module.app) as client:
+        for origin, allowed in [('https://app.example.com', True),
+                                ('https://example.com.attacker.invalid', False),
+                                ('http://app.example.com', False)]:
+            response = client.options('/tts-proxy', headers={
+                'Origin': origin, 'Access-Control-Request-Method': 'POST',
+            })
+            assert response.status_code == (200 if allowed else 400)
+            assert response.headers.get('access-control-allow-origin') == (origin if allowed else None)
+
+
+def test_cors_regex_without_credentials(monkeypatch):
+    module = _load_api_with_env(
+        monkeypatch, TRANSLATE_RT_API_TOKEN='t',
+        CORS_ALLOW_ORIGIN_REGEX=r'https://app\.example\.com',
+    )
+    with TestClient(module.app) as client:
+        response = client.options('/tts-proxy', headers={
+            'Origin': 'https://app.example.com', 'Access-Control-Request-Method': 'POST',
+        })
+        assert response.status_code == 200
+        assert response.headers['access-control-allow-origin'] == 'https://app.example.com'
+        assert 'access-control-allow-credentials' not in response.headers
+
+
+def test_invalid_cors_regex_fails_at_startup(monkeypatch):
+    with pytest.raises(RuntimeError, match='CORS_ALLOW_ORIGIN_REGEX'):
+        _load_api_with_env(monkeypatch, TRANSLATE_RT_API_TOKEN='t', CORS_ALLOW_ORIGIN_REGEX='[')

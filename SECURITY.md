@@ -20,5 +20,13 @@ restrict access to them with firewall/container networking rules.
 because an empty token used to disable authentication and expose every
 provider-backed route as an open relay. Only `/healthz` stays public;
 `/docs`, `/redoc` and `/openapi.json` require the token. CORS is same-origin by
-default (`CORS_ALLOW_ORIGINS` empty) and credentialed CORS is rejected at startup
-when the resulting origin set or regex matches arbitrary hosts.
+default (`CORS_ALLOW_ORIGINS` empty). With `CORS_ALLOW_CREDENTIALS=true`, wildcard
+origins and custom `CORS_ALLOW_ORIGIN_REGEX` are rejected at startup. Use explicit
+`CORS_ALLOW_ORIGINS`; domain suffix entries such as `https://.example.com` remain
+supported through escaped, server-generated patterns. Invalid regex syntax is
+rejected at startup even without credentials.
+
+TTS models and voices are matched exactly against `TTS_ALLOWED_MODELS` and
+`TTS_ALLOWED_VOICES` (comma-separated, defaults `gpt-4o-mini-tts` and `alloy`).
+Empty lists and wildcard entries are rejected at startup. Configure additional
+values only when they are approved for the provider account.
