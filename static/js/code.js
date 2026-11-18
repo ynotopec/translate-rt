@@ -583,8 +583,8 @@
   const Transcription = {
     removeOverlap(previous,current) {
       if (!previous || !current) return current;
-      const left=previous.trim().split(/\\s+/),right=current.trim().split(/\\s+/);
-      const norm=x=>x.toLocaleLowerCase().replace(/^[^\\p{L}\\p{N}]+|[^\\p{L}\\p{N}]+$/gu,'');
+      const left=previous.trim().split(/\s+/),right=current.trim().split(/\s+/);
+      const norm=x=>x.toLocaleLowerCase().replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu,'');
       for (let n=Math.min(16,left.length,right.length);n>=3;n--) {
         if (left.slice(-n).every((w,i)=>norm(w)===norm(right[i])))
           return right.slice(n).join(' ');
