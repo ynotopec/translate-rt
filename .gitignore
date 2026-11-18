@@ -67,3 +67,6 @@ private/
 secrets/
 .pytest_cache/
 .ruff_cache/
+
+# Local commit message file
+.commitmsg

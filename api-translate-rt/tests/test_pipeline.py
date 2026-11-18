@@ -9,6 +9,8 @@ from unittest.mock import patch
 os.environ.setdefault('AUDIO_API_KEY', 'test-audio-key')
 os.environ.setdefault('OPENAI_API_KEY', 'test-openai-key')
 os.environ.setdefault('OPENAI_API_BASE', 'https://openai.invalid/v1')
+# app.py refuses to start without a token; tests must opt in explicitly.
+os.environ.setdefault('TRANSLATE_RT_API_TOKEN', 'test-api-token')
 
 APP_PATH = Path(__file__).resolve().parents[1] / 'app.py'
 SPEC = importlib.util.spec_from_file_location('translate_rt_api', APP_PATH)

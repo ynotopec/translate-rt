@@ -54,13 +54,13 @@ OPENAI_API_SCHEME=https
 OPENAI_API_HOST=api.openai.com
 OPENAI_API_BASE=${OPENAI_API_SCHEME}://${OPENAI_API_HOST}/v1
 #OPENAI_API_MODEL=gpt-4o-mini
-#TRANSLATE_RT_API_TOKEN=change-me
+TRANSLATE_RT_API_TOKEN=replace-with-a-strong-shared-token
 TRANSLATE_RT_API_SCHEME=https
 TRANSLATE_RT_API_HOST=api-translate-rt.ailab.infocepo.com
 TRANSLATE_RT_API_BASE=${TRANSLATE_RT_API_SCHEME}://${TRANSLATE_RT_API_HOST}
 ```
 
-Set `TRANSLATE_RT_API_TOKEN` to require `Authorization: Bearer <token>` on backend API routes. Flask uses `TRANSLATE_RT_API_BASE` server-side; browser requests stay on the frontend origin.
+`TRANSLATE_RT_API_TOKEN` is required: use the same strong token on Flask and FastAPI. Backend API routes require `Authorization: Bearer <token>`. Flask uses `TRANSLATE_RT_API_BASE` server-side; browser requests stay on the frontend origin.
 
 ## Popular API endpoints
 
@@ -123,9 +123,24 @@ Defaults, configurable through environment variables:
 | `PROXY_READ_TIMEOUT` | 120 seconds | Flask upstream read timeout |
 
 API limits reject excess demand with 413/429, including bodies sent without
-Content-Length. Health and documentation routes are exempt. Use the ingress for
-shared quotas, per-user limits, connection limits and slow-upload timeouts across
-workers/replicas. Text and TTS input are capped at 20,000 characters.
+Content-Length. Only the `/healthz` liveness probe is public: `/docs`, `/redoc`
+and `/openapi.json` require the API token so the route table is not published.
+Use the ingress for shared quotas, per-user limits, connection limits and
+slow-upload timeouts across workers/replicas. Text and TTS input are capped at
+20,000 characters.
+
+`TRANSLATE_RT_API_TOKEN` is mandatory and the API refuses to start without it.
+The TTS proxy accepts provider-specific model and voice identifiers (including
+namespaced models and case-sensitive voices) without a local catalogue. It
+validates identifier syntax and parameter types before forwarding requests;
+malformed parameters return 422.
+
+CORS is same-origin by default. Set `CORS_ALLOW_ORIGINS` or
+`CORS_ALLOW_ORIGIN_REGEX` explicitly for another frontend. Custom regexes also
+work with `CORS_ALLOW_CREDENTIALS=true`; the operator controls their scope.
+Regex syntax is checked at startup, and `CORS_ALLOW_ORIGINS=*` is rejected
+with credentials. Domain suffix entries such as `https://.example.com` remain
+supported.
 
 Translation caching has been removed: `MAX_CACHE_SIZE` no longer has an effect.
 Repeated phrases now call the provider again. Application logs omit payloads and
