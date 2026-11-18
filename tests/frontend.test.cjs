@@ -72,10 +72,10 @@ test('missing primary translation for third language preserves original', () => 
 });
 
 test('sentence boundaries use a longer maximum window and silence hold', () => {
-  assert.match(source, /maxChunkDuration:\s*15000/);
-  assert.match(source, /minChunkDuration:\s*4500/);
-  assert.match(source, /punctuationSilenceMs:\s*1200/);
-  assert.match(source, /punctuationCheckMs:\s*5000/);
+  assert.match(source, /maxChunkDuration:\s*9000/);
+  assert.match(source, /minChunkDuration:\s*2500/);
+  assert.match(source, /punctuationSilenceMs:\s*800/);
+  assert.match(source, /punctuationCheckMs:\s*3000/);
   assert.match(source, /silenceHoldMs:\s*250/);
 });
 test('PCM capture never stops or restarts MediaRecorder between windows', () => {
@@ -149,4 +149,15 @@ test('diarization noise takes precedence over hallucinated STT text', () => {
   assert.match(handler, /result\?\.diarization\?\.noise\) return/);
   const drain=source.split('    drainResults() {')[1].split('\n    async ttsSpeak(')[0];
   assert.match(drain, /result\?\.transcription && !result\?\.diarization\?\.noise/);
+});
+
+test('16kHz PCM reduction reduces network payload by three times', () => {
+  const body=source.split('    downsample(pcm, sourceRate, targetRate=16000) {')[1]
+    .split('\n    },')[0];
+  const downsample=new Function('pcm','sourceRate','targetRate',body);
+  const input=new Float32Array(48000).fill(0.5);
+  const out=downsample(input,48000,16000);
+  assert.equal(out.rate,16000);
+  assert.equal(out.pcm.length,16000);
+  assert.ok(Math.abs(out.pcm[500]-0.5)<0.001);
 });
