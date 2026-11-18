@@ -527,8 +527,10 @@
           onError?.(new Error('Audio playback failed'));
         });
 
-        // Never suspend incoming speech during playback. Browser AEC is enabled;
-        // headphones are recommended to prevent the synthetic voice being captured.
+        // Avoid the TTS -> microphone -> STT feedback loop. The microphone
+        // remains active during TTS synthesis, but not while audio is played.
+        // Browser echoCancellation cannot reliably cancel external speakers.
+        Recorder.pauseForTTS();
         await audio.play();
       } catch (err) {
         console.error('Erreur TTS:', err);
@@ -610,7 +612,7 @@
   const Transcription = {
     // Normalize only for comparison: keep the real transcription unchanged.
     words(text) {
-      return (text.match(/[\\p{L}\\p{N}]+/gu) || []).map(w => w.toLocaleLowerCase());
+      return (text.match(/[\p{L}\p{N}]+/gu) || []).map(w => w.toLocaleLowerCase());
     },
     // Return the number of leading words that were already heard. Unlike a
     // suffix-only comparison, this recognizes replay from *inside* a prior chunk.
@@ -630,7 +632,7 @@
     },
     removeOverlap(previous,current) {
       if (!previous || !current) return current;
-      const words = Array.from(current.matchAll(/[\\p{L}\\p{N}]+/gu));
+      const words = Array.from(current.matchAll(/[\p{L}\p{N}]+/gu));
       const count = Transcription.repeatedPrefix(previous,current);
       if (!count) return current;
       if (count >= words.length) return '';
