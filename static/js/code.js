@@ -619,16 +619,18 @@
     repeatedPrefix(previous, current) {
       const left = Transcription.words(previous);
       const right = Transcription.words(current);
-      if (left.length < 6 || right.length < 6) return 0;
+      if (!left.length || !right.length) return 0;
       let best = 0;
       for (let start = 0; start < left.length; start++) {
         let n = 0;
         while (n < right.length && start+n < left.length &&
                right[n] === left[start+n]) n++;
-        best = Math.max(best, n);
+        // A two-word overlap is enough only at the *exact* chunk
+        // boundary; matches inside older text require >=6 words.
+        const atBoundary = start + n === left.length;
+        if ((atBoundary && n >= 2) || n >= 6) best = Math.max(best,n);
       }
-      // Only deduplicate an unambiguous passage, not a repeated short phrase.
-      return best >= 6 ? best : 0;
+      return best;
     },
     removeOverlap(previous,current) {
       if (!previous || !current) return current;
@@ -670,8 +672,12 @@
       }, Limits.TTS_FLUSH_MS);
     },
 
-    _resolveVoiceNumber(identifier, transcription) {
+    _resolveVoiceNumber(identifier, transcription, continuation = false) {
       const wordCount = countWords(transcription);
+      // Diarization IDs are produced independently for each chunk. When
+      // there is a confirmed textual boundary overlap, keep the prior speaker.
+      if (continuation && State.lastVoiceNumber !== null)
+        return State.lastVoiceNumber;
 
       // Déjà connu → garder le mapping confirmé
       if (identifier && State.voiceIndex.has(identifier)) {
@@ -705,6 +711,8 @@
 
       const original = safeText(result?.transcription || '').trim();
       if (!original || Transcription.isPlaybackEcho(original)) return;
+      const preceding = State.recentRenderedSources.at(-1) || '';
+      const continuation = Transcription.repeatedPrefix(preceding, original) >= 2;
       const transcription = Transcription.deduplicate(original,State.recentRenderedSources);
       // Do not play, translate for display, or assign a new speaker to echoes.
       if (!transcription) return;
@@ -736,7 +744,7 @@
         if (State.recentTranslatedSources.length > 4) State.recentTranslatedSources.shift();
       }
       const phraseForTTS = (translated && translated !== transcription) ? translated : null;
-      const voiceNumber = Transcription._resolveVoiceNumber(identifier, transcription);
+      const voiceNumber = Transcription._resolveVoiceNumber(identifier, transcription, continuation);
 
       if (voiceNumber == null) return;
       State.lastVoiceNumber = voiceNumber;
