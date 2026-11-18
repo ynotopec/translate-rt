@@ -18,10 +18,10 @@ function render(result, target = 'es', primary = 'fr') {
     _pushToDom: value => { rendered = value; },
     resetFlushTimer() {},
   };
-  new Function('result', 'DOM', 'safeText', 'State', 'Transcription', body)(
+  new Function('result', 'DOM', 'safeText', 'State', 'Transcription', 'now', body)(
     result, { langSelect: { value: target }, primaryLangSelect: { value: primary } }, String,
     { recentRenderedSources: [], recentTranslatedSources: [], recentTtsPhrases: [],
-      voiceIndex: new Map(), lastVoiceNumber: null }, transcription);
+      voiceIndex: new Map(), lastVoiceNumber: null, lastShortResult: '', lastShortResultAt: 0 }, transcription, () => 1000);
   return rendered;
 }
 
@@ -99,7 +99,7 @@ test('overlap removes repeated words but preserves unrelated text', () => {
 test('audible audio is submitted even if VAD frame tracking misses it', () => {
   assert.match(source, /const audible = durationMs >= 800/);
   assert.match(source, /speechMs >= 300/);
-  assert.match(source, /VAD\._shouldSendChunk\(\) \|\| audible/);
+  assert.match(source, /vadAccepted \|\| audible/);
 });
 test('TTS playback pauses capture only after synthesis, before playback', () => {
   const playback = source.split('    async ttsSpeak(')[1].split('  // =========================\n  // TTS Queue')[0];
@@ -148,7 +148,7 @@ test('diarization noise takes precedence over hallucinated STT text', () => {
   const handler=source.split('    onResult(result) {')[1].split('\n    _pushToDom(')[0];
   assert.match(handler, /result\?\.diarization\?\.noise\) return/);
   const drain=source.split('    drainResults() {')[1].split('\n    async ttsSpeak(')[0];
-  assert.match(drain, /result\?\.transcription && !result\?\.diarization\?\.noise/);
+  assert.match(drain, /else if \(result\?\.diarization\?\.noise\)/);
 });
 
 test('16kHz PCM reduction reduces network payload by three times', () => {
