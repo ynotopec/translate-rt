@@ -104,14 +104,14 @@
   const Limits = {
     MAX_MESSAGES: 65536,
     MAX_BUFFER_LENGTH: 4,
-    minChunkDuration: 4500,
-    maxChunkDuration: 15000,
-    minSilenceMs: 1200,
+    minChunkDuration: 2500,
+    maxChunkDuration: 9000,
+    minSilenceMs: 800,
     minVoiceMs: 400,
     minSpeechRms: 0.012,
     minSpeechFrames: 6,
-    punctuationCheckMs: 5000,
-    punctuationSilenceMs: 1200,
+    punctuationCheckMs: 3000,
+    punctuationSilenceMs: 800,
     TTS_FLUSH_MS: 10000,
     keepCurrentSpeakerMaxWords: 4,
   };
@@ -273,6 +273,24 @@
       }
       return new Blob([bytes],{type:'audio/wav'});
     },
+    // Reduce WAV payload size (48kHz -> 16kHz, ~3x smaller). A weighted
+    // box filter averages source samples instead of simply decimating.
+    downsample(pcm, sourceRate, targetRate=16000) {
+      if (sourceRate <= targetRate) return {pcm, rate:sourceRate};
+      const length=Math.ceil(pcm.length*targetRate/sourceRate);
+      const result=new Float32Array(length);
+      const ratio=sourceRate/targetRate;
+      for (let i=0;i<length;i++) {
+        const left=i*ratio, right=Math.min(pcm.length,(i+1)*ratio);
+        let sum=0;
+        for (let j=Math.floor(left);j<Math.ceil(right);j++) {
+          const weight=Math.min(right,j+1)-Math.max(left,j);
+          if (weight>0) sum+=pcm[j]*weight;
+        }
+        result[i]=sum/(right-left);
+      }
+      return {pcm:result,rate:targetRate};
+    },
     flush(final=false) {
       if (!State.audioContext || !State.pcmSamples) return;
       const pcm=new Float32Array(State.pcmSamples);
@@ -292,7 +310,8 @@
         disposition: vadAccepted || audible ? 'upload' : 'skip'
       });
       if (vadAccepted || audible) {
-        Network.queueAudio(Recorder.encodeWav(pcm,State.audioContext.sampleRate),State.captureGeneration);
+        const reduced=Recorder.downsample(pcm,State.audioContext.sampleRate);
+        Network.queueAudio(Recorder.encodeWav(reduced.pcm,reduced.rate),State.captureGeneration);
       } else if (durationMs >= 500) {
         console.debug('[audio] silence skipped', {durationMs: Math.round(durationMs), speechMs: Math.round(speechMs), rms});
       }
@@ -475,9 +494,9 @@
     queueAudio(blob,generation) {
       const sequence=State.nextSequence++;
       const context=State.recentTranscripts.slice(-2).join(' ').slice(-500);
-      Network.sendAudio(blob,sequence,generation,context);
+      Network.sendAudio(blob,sequence,generation,context,performance.now());
     },
-    async sendAudio(blob,sequence,generation,context) {
+    async sendAudio(blob,sequence,generation,context,queuedAt) {
       State.uploadInFlight++;
       let json;
       try {
@@ -491,6 +510,10 @@
         });
         if (!res.ok) throw new Error('HTTP '+res.status);
         json=await res.json();
+        if (State.audioDebug) console.debug('[audio-latency]', {
+          sequence, uploadKB:Math.round(blob.size/1024),
+          networkMs:Math.round(performance.now()-queuedAt)
+        });
       } catch(error) {
         console.error('Erreur upload audio:',error);
         json={error:'Erreur réseau : '+(error.message||'inconnue')};
@@ -499,15 +522,20 @@
         // Results from prior sessions never enter a new conversation.
         if (generation===State.captureGeneration ||
           (generation===State.captureGeneration-1 && !State.captureActive)) {
-          State.pendingResults.set(sequence,json);
+          State.pendingResults.set(sequence,{result:json,receivedAt:performance.now()});
           Network.drainResults();
         }
       }
     },
     drainResults() {
       while (State.pendingResults.has(State.nextResultSequence)) {
-        const result=State.pendingResults.get(State.nextResultSequence);
+        const item=State.pendingResults.get(State.nextResultSequence);
         State.pendingResults.delete(State.nextResultSequence++);
+        const result=item.result;
+        if (State.audioDebug) console.debug('[audio-display]', {
+          sequence:State.nextResultSequence-1,
+          reorderWaitMs:Math.round(performance.now()-item.receivedAt)
+        });
         if (result?.error) showErrorMessage(DOM.transcriptionResult,result.error);
         else if (result?.diarization?.noise) {
           if (State.audioDebug) console.debug('[diarization] rejected noise');
