@@ -83,14 +83,21 @@ test('PCM capture never stops or restarts MediaRecorder between windows', () => 
   assert.doesNotMatch(source, /State\.mediaRecorder\.stop\(/);
 });
 test('overlap removes repeated words but preserves unrelated text', () => {
-  const part=source.split('    removeOverlap(previous,current) {')[1].split('\n    },')[0];
-  const f=new Function('previous','current',part);
-  assert.equal(f('the president of the United States','of the United States spoke'), 'spoke');
-  assert.equal(f('Hello world','another sentence'), 'another sentence');
+  const extract = (start) => source.split(start)[1].split('\n    },')[0];
+  const wordBody=extract('    words(text) {');
+  const prefixBody=extract('    repeatedPrefix(previous, current) {');
+  const trimBody=extract('    removeOverlap(previous,current) {');
+  const helper={};
+  helper.words=t=>new Function('text',wordBody)(t);
+  helper.repeatedPrefix=(a,b)=>new Function('previous','current','Transcription',prefixBody)(a,b,helper);
+  const trim=(a,b)=>new Function('previous','current','Transcription',trimBody)(a,b,helper);
+  assert.equal(trim('the president of the United States','of the United States spoke'), 'spoke');
+  assert.equal(trim('Hello world','another sentence'), 'another sentence');
 });
 
 test('audible audio is submitted even if VAD frame tracking misses it', () => {
-  assert.match(source, /const audible = durationMs >= 500/);
+  assert.match(source, /const audible = durationMs >= 800/);
+  assert.match(source, /speechMs >= 300/);
   assert.match(source, /VAD\._shouldSendChunk\(\) \|\| audible/);
 });
 test('TTS playback pauses capture only after synthesis, before playback', () => {
@@ -129,4 +136,9 @@ test('new diarization IDs require confirmation before changing speaker', () => {
   assert.equal(call('new-id'),1);
   assert.equal(call('new-id'),2);
   assert.equal(call('new-id'),2);
+});
+
+test('short repeated ASR hallucinations are throttled, not the first utterance', () => {
+  assert.match(source, /tokens\.length <= 2/);
+  assert.match(source, /clock - State\.lastShortResultAt < 10000/);
 });
