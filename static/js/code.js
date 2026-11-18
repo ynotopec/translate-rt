@@ -104,7 +104,7 @@
   const Limits = {
     MAX_MESSAGES: 65536,
     MAX_BUFFER_LENGTH: 4,
-    minChunkDuration: 1500,
+    minChunkDuration: 4500,
     maxChunkDuration: 15000,
     minSilenceMs: 1200,
     minVoiceMs: 400,
@@ -161,6 +161,8 @@
     // Diarisation / affichage
     voiceIndex: new Map(),          // identifier -> confirmed voiceNumber
     voiceCounter: 1,
+    pendingSpeakerId: null,
+    pendingSpeakerCount: 0,
     textBuffer: '',
     lastVoiceNumber: null,
     flushTimeout: null,
@@ -178,6 +180,8 @@
   const resetVoiceIndexing = () => {
     State.voiceIndex.clear();
     State.voiceCounter = 1;
+    State.pendingSpeakerId = null;
+    State.pendingSpeakerCount = 0;
     State.lastVoiceNumber = null;
   };
 
@@ -676,16 +680,23 @@
       const wordCount = countWords(transcription);
       // Diarization IDs are produced independently for each chunk. When
       // there is a confirmed textual boundary overlap, keep the prior speaker.
-      if (continuation && State.lastVoiceNumber !== null)
+      if (continuation && State.lastVoiceNumber !== null) {
+        State.pendingSpeakerId = null;
+        State.pendingSpeakerCount = 0;
         return State.lastVoiceNumber;
+      }
 
       // Déjà connu → garder le mapping confirmé
       if (identifier && State.voiceIndex.has(identifier)) {
+        State.pendingSpeakerId = null;
+        State.pendingSpeakerCount = 0;
         return State.voiceIndex.get(identifier);
       }
 
       // Si identifiant absent, on reste sur le locuteur courant si possible
       if (!identifier) {
+        State.pendingSpeakerId = null;
+        State.pendingSpeakerCount = 0;
         if (State.lastVoiceNumber !== null) return State.lastVoiceNumber;
         return State.voiceCounter++;
       }
@@ -700,6 +711,20 @@
       }
 
       // Vraie nouvelle phrase → on confirme un nouveau mapping
+      // Per-chunk diarization identifiers are not stable identity evidence.
+      // Require a second consecutive chunk with the same new identifier
+      // before changing speaker; single-chunk noise keeps the current voice.
+      if (State.lastVoiceNumber !== null) {
+        if (State.pendingSpeakerId !== identifier) {
+          State.pendingSpeakerId = identifier;
+          State.pendingSpeakerCount = 1;
+          return State.lastVoiceNumber;
+        }
+        State.pendingSpeakerCount++;
+        if (State.pendingSpeakerCount < 2) return State.lastVoiceNumber;
+      }
+      State.pendingSpeakerId = null;
+      State.pendingSpeakerCount = 0;
       const voiceNumber = State.voiceCounter++;
       State.voiceIndex.set(identifier, voiceNumber);
       return voiceNumber;
