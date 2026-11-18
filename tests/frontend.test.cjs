@@ -67,7 +67,8 @@ test('missing primary translation for third language preserves original', () => 
 
 test('sentence boundaries use a longer maximum window and silence hold', () => {
   assert.match(source, /maxChunkDuration:\s*15000/);
-  assert.match(source, /punctuationSilenceMs:\s*700/);
+  assert.match(source, /punctuationSilenceMs:\s*1200/);
+  assert.match(source, /punctuationCheckMs:\s*5000/);
   assert.match(source, /silenceHoldMs:\s*250/);
 });
 test('PCM capture never stops or restarts MediaRecorder between windows', () => {
