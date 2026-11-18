@@ -138,6 +138,7 @@
     lastOriginal: '', lastTranslated: '', recentTranscripts: [],
     recentRenderedSources: [], recentTranslatedSources: [], recentTtsPhrases: [],
     lastShortResult: '', lastShortResultAt: 0,
+    audioDebug: false,
     audioContext: null,
     analyser: null,
     dataArray: null,
@@ -244,6 +245,7 @@
         State.lastTranslated = ''; State.recentTranscripts = [];
         State.recentRenderedSources = []; State.recentTranslatedSources = [];
         State.recentTtsPhrases = [];
+        State.audioDebug = localStorage.getItem('audioDebug') === '1';
         State.lastShortResult = ''; State.lastShortResultAt = 0;
         State.captureActive = true; State.capturePaused = false;
         State.recordingStart = now();
@@ -283,7 +285,13 @@
       const speechMs = State.pcmSpeechSamples * 1000 / State.audioContext.sampleRate;
       const audible = durationMs >= 800 && speechMs >= 300 &&
         rms >= 0.006;
-      if (VAD._shouldSendChunk() || audible) {
+      const vadAccepted = VAD._shouldSendChunk();
+      if (State.audioDebug) console.debug('[audio-window]', {
+        durationMs: Math.round(durationMs), speechMs: Math.round(speechMs),
+        rms: Number(rms.toFixed(4)), vadAccepted, audible,
+        disposition: vadAccepted || audible ? 'upload' : 'skip'
+      });
+      if (vadAccepted || audible) {
         Network.queueAudio(Recorder.encodeWav(pcm,State.audioContext.sampleRate),State.captureGeneration);
       } else if (durationMs >= 500) {
         console.debug('[audio] silence skipped', {durationMs: Math.round(durationMs), speechMs: Math.round(speechMs), rms});
@@ -501,7 +509,9 @@
         const result=State.pendingResults.get(State.nextResultSequence);
         State.pendingResults.delete(State.nextResultSequence++);
         if (result?.error) showErrorMessage(DOM.transcriptionResult,result.error);
-        else if (result?.transcription && !result?.diarization?.noise) {
+        else if (result?.diarization?.noise) {
+          if (State.audioDebug) console.debug('[diarization] rejected noise');
+        } else if (result?.transcription) {
           Transcription.onResult(result);
           State.recentTranscripts.push(result.transcription);
           if (State.recentTranscripts.length>3) State.recentTranscripts.shift();
