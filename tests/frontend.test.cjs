@@ -65,17 +65,17 @@ test('missing primary translation for third language preserves original', () => 
 });
 
 test('sentence boundaries use a longer maximum window and silence hold', () => {
-  assert.match(source, /maxChunkDuration:\\s*15000/);
-  assert.match(source, /punctuationSilenceMs:\\s*700/);
-  assert.match(source, /silenceHoldMs:\\s*250/);
+  assert.match(source, /maxChunkDuration:\s*15000/);
+  assert.match(source, /punctuationSilenceMs:\s*700/);
+  assert.match(source, /silenceHoldMs:\s*250/);
 });
 test('PCM capture never stops or restarts MediaRecorder between windows', () => {
   assert.match(source, /createScriptProcessor/);
   assert.match(source, /encodeWav/);
-  assert.doesNotMatch(source, /State\\.mediaRecorder\\.stop\\(/);
+  assert.doesNotMatch(source, /State\.mediaRecorder\\.stop\(/);
 });
 test('overlap removes repeated words but preserves unrelated text', () => {
-  const part=source.split('    removeOverlap(previous,current) {')[1].split('\\n    },')[0];
+  const part=source.split('    removeOverlap(previous,current) {')[1].split('\n    },')[0];
   const f=new Function('previous','current',part);
   assert.equal(f('the president of the United States','of the United States spoke'), 'spoke');
   assert.equal(f('Hello world','another sentence'), 'another sentence');
