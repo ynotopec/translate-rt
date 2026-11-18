@@ -86,7 +86,12 @@ test('audible audio is submitted even if VAD frame tracking misses it', () => {
   assert.match(source, /const audible = durationMs >= 500/);
   assert.match(source, /VAD\._shouldSendChunk\(\) \|\| audible/);
 });
-test('TTS playback no longer suspends continuous microphone capture', () => {
+test('TTS playback pauses capture only after synthesis, before playback', () => {
   const playback = source.split('    async ttsSpeak(')[1].split('  // =========================\n  // TTS Queue')[0];
-  assert.doesNotMatch(playback, /Recorder\.pauseForTTS\(\)/);
+  assert.match(playback, /Recorder\.pauseForTTS\(\);\s*await audio\.play\(\)/);
+  assert.ok(playback.indexOf('await response.blob()') < playback.indexOf('Recorder.pauseForTTS()'));
+});
+
+test('Unicode word tokenization is actually enabled for replay matching', () => {
+  assert.match(source, /text\.match\(\/\[\\p\{L\}\\p\{N\}\]\+\/gu\)/);
 });
