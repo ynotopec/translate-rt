@@ -136,6 +136,7 @@
     captureActive: false, capturePaused: false, captureGeneration: 0,
     nextSequence: 0, nextResultSequence: 0, pendingResults: new Map(),
     lastOriginal: '', lastTranslated: '', recentTranscripts: [],
+    recentRenderedSources: [], recentTranslatedSources: [], recentTtsPhrases: [],
     audioContext: null,
     analyser: null,
     dataArray: null,
@@ -230,6 +231,8 @@
         State.nextSequence = 0; State.nextResultSequence = 0;
         State.pendingResults.clear(); State.lastOriginal = '';
         State.lastTranslated = ''; State.recentTranscripts = [];
+        State.recentRenderedSources = []; State.recentTranslatedSources = [];
+        State.recentTtsPhrases = [];
         State.captureActive = true; State.capturePaused = false;
         State.recordingStart = now();
         VAD.resetSpeechTracking(); VAD.start();
@@ -549,6 +552,8 @@
     enqueue(phrase, domElement) {
       if (!DOM.enableTTS?.checked || !phrase) return;
       State.ttsQueue.push({ phrase, element: domElement });
+      State.recentTtsPhrases.push({ text: phrase, time: now() });
+      if (State.recentTtsPhrases.length > 8) State.recentTtsPhrases.shift();
       TTS._process();
     },
 
@@ -603,15 +608,55 @@
   // Transcription rendering
   // =========================
   const Transcription = {
+    // Normalize only for comparison: keep the real transcription unchanged.
+    words(text) {
+      return (text.match(/[\\p{L}\\p{N}]+/gu) || []).map(w => w.toLocaleLowerCase());
+    },
+    // Return the number of leading words that were already heard. Unlike a
+    // suffix-only comparison, this recognizes replay from *inside* a prior chunk.
+    repeatedPrefix(previous, current) {
+      const left = Transcription.words(previous);
+      const right = Transcription.words(current);
+      if (left.length < 6 || right.length < 6) return 0;
+      let best = 0;
+      for (let start = 0; start < left.length; start++) {
+        let n = 0;
+        while (n < right.length && start+n < left.length &&
+               right[n] === left[start+n]) n++;
+        best = Math.max(best, n);
+      }
+      // Only deduplicate an unambiguous passage, not a repeated short phrase.
+      return best >= 6 ? best : 0;
+    },
     removeOverlap(previous,current) {
       if (!previous || !current) return current;
-      const left=previous.trim().split(/\s+/),right=current.trim().split(/\s+/);
-      const norm=x=>x.toLocaleLowerCase().replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu,'');
-      for (let n=Math.min(16,left.length,right.length);n>=3;n--) {
-        if (left.slice(-n).every((w,i)=>norm(w)===norm(right[i])))
-          return right.slice(n).join(' ');
+      const words = Array.from(current.matchAll(/[\\p{L}\\p{N}]+/gu));
+      const count = Transcription.repeatedPrefix(previous,current);
+      if (!count) return current;
+      if (count >= words.length) return '';
+      // Preserve the original accents, punctuation and capitalization.
+      return current.slice(words[count].index).trim();
+    },
+    deduplicate(current, history) {
+      let value = current;
+      // Match against complete prior chunks; repeat may start in the middle.
+      for (const previous of history.slice(-3)) {
+        value = Transcription.removeOverlap(previous,value);
+        if (!value) return '';
       }
-      return current;
+      return value;
+    },
+    isPlaybackEcho(transcription) {
+      const t = now();
+      State.recentTtsPhrases = State.recentTtsPhrases.filter(p => t-p.time < 12000);
+      const current = Transcription.words(transcription);
+      if (current.length < 6) return false;
+      return State.recentTtsPhrases.some(p => {
+        const spoken = Transcription.words(p.text);
+        if (spoken.length < 6) return false;
+        const overlap = Transcription.repeatedPrefix(p.text,transcription);
+        return overlap >= Math.max(6,Math.ceil(current.length*0.8));
+      });
     },
     resetFlushTimer() {
       if (State.flushTimeout) clearTimeout(State.flushTimeout);
@@ -656,11 +701,14 @@
       // Diarization noise classification must not discard a valid STT result.
       if (result?.diarization?.noise && !result?.transcription?.trim()) return;
 
-      let transcription = safeText(result?.transcription || '').trim();
-      const original = transcription;
-      transcription = Transcription.removeOverlap(State.lastOriginal,transcription);
-      if (transcription) State.lastOriginal=original;
+      const original = safeText(result?.transcription || '').trim();
+      if (!original || Transcription.isPlaybackEcho(original)) return;
+      const transcription = Transcription.deduplicate(original,State.recentRenderedSources);
+      // Do not play, translate for display, or assign a new speaker to echoes.
       if (!transcription) return;
+      State.recentRenderedSources.push(original);
+      if (State.recentRenderedSources.length > 4) State.recentRenderedSources.shift();
+      State.lastOriginal=original;
 
       const rawIdentifier = result?.diarization?.identifier;
       const identifier = rawIdentifier ? String(rawIdentifier).slice(-4) : '';
@@ -673,12 +721,18 @@
       const outputLang = result.detected_lang === primaryLang ? targetLang : primaryLang;
       const tradKeys = result.detected_lang === outputLang
         ? [] : [`translation_${outputLang}`];
-      let translated = tradKeys.map(k => result?.[k]).find(Boolean) || transcription;
-      if (translated !== original) {
-        translated = Transcription.removeOverlap(State.lastTranslated,translated);
-        if (translated) State.lastTranslated = tradKeys.map(k => result?.[k]).find(Boolean) || '';
-      } else translated = transcription;
+      const rawTranslation = tradKeys.map(k => result?.[k]).find(Boolean) || '';
+      // The provider translated the complete chunk, possibly including the
+      // replayed prefix. Avoid showing that stale translation for a trimmed chunk.
+      // The original remains visible rather than displaying duplicated content.
+      const translated = transcription === original && rawTranslation
+        ? Transcription.deduplicate(rawTranslation,State.recentTranslatedSources || [])
+        : transcription;
 
+      if (rawTranslation && translated && translated !== transcription) {
+        State.recentTranslatedSources.push(rawTranslation);
+        if (State.recentTranslatedSources.length > 4) State.recentTranslatedSources.shift();
+      }
       const phraseForTTS = (translated && translated !== transcription) ? translated : null;
       const voiceNumber = Transcription._resolveVoiceNumber(identifier, transcription);
 
