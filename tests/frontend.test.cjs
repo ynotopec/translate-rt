@@ -73,7 +73,7 @@ test('sentence boundaries use a longer maximum window and silence hold', () => {
 test('PCM capture never stops or restarts MediaRecorder between windows', () => {
   assert.match(source, /createScriptProcessor/);
   assert.match(source, /encodeWav/);
-  assert.doesNotMatch(source, /State\.mediaRecorder\\.stop\(/);
+  assert.doesNotMatch(source, /State\.mediaRecorder\.stop\(/);
 });
 test('overlap removes repeated words but preserves unrelated text', () => {
   const part=source.split('    removeOverlap(previous,current) {')[1].split('\n    },')[0];
