@@ -110,8 +110,8 @@
     minVoiceMs: 400,
     minSpeechRms: 0.012,
     minSpeechFrames: 6,
-    punctuationCheckMs: 3000,
-    punctuationSilenceMs: 700,
+    punctuationCheckMs: 5000,
+    punctuationSilenceMs: 1200,
     TTS_FLUSH_MS: 10000,
     keepCurrentSpeakerMaxWords: 4,
   };
@@ -274,7 +274,7 @@
       } else if (durationMs >= 500) {
         console.debug('[audio] silence skipped', {durationMs: Math.round(durationMs), rms});
       }
-      // Only forced speech cuts retain 400ms overlap, never silence boundaries.
+      // Forced speech cuts retain a short context tail for Whisper. Silence boundaries are closed cleanly.
       const overlap=(!final && State.isSpeech)
         ? Math.min(pcm.length,Math.floor(State.audioContext.sampleRate*0.4)) : 0;
       State.pcmFrames=overlap?[pcm.slice(-overlap)]:[];
