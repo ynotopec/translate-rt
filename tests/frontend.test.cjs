@@ -11,11 +11,16 @@ function render(result, target = 'es', primary = 'fr') {
   const transcription = {
     _resolveVoiceNumber: () => 1,
     removeOverlap: (_previous, current) => current,
+    deduplicate: (current, _history) => current,
+    isPlaybackEcho: () => false,
+    repeatedPrefix: () => 0,
     _pushToDom: value => { rendered = value; },
     resetFlushTimer() {},
   };
   new Function('result', 'DOM', 'safeText', 'State', 'Transcription', body)(
-    result, { langSelect: { value: target }, primaryLangSelect: { value: primary } }, String, {}, transcription);
+    result, { langSelect: { value: target }, primaryLangSelect: { value: primary } }, String,
+    { recentRenderedSources: [], recentTranslatedSources: [], recentTtsPhrases: [],
+      voiceIndex: new Map(), lastVoiceNumber: null }, transcription);
   return rendered;
 }
 
@@ -67,6 +72,7 @@ test('missing primary translation for third language preserves original', () => 
 
 test('sentence boundaries use a longer maximum window and silence hold', () => {
   assert.match(source, /maxChunkDuration:\s*15000/);
+  assert.match(source, /minChunkDuration:\s*4500/);
   assert.match(source, /punctuationSilenceMs:\s*1200/);
   assert.match(source, /punctuationCheckMs:\s*5000/);
   assert.match(source, /silenceHoldMs:\s*250/);
@@ -111,4 +117,16 @@ test('two-word overlap at a true chunk boundary is removed', () => {
   assert.equal(rp('It is just a test', 'it is'),0);
   const trim=(a,b)=>new Function('previous','current','Transcription',remove)(a,b,t);
   assert.equal(trim("I'll feed","I'll feed their interviews"),'their interviews');
+});
+
+test('new diarization IDs require confirmation before changing speaker', () => {
+  const body=source.split('    _resolveVoiceNumber(identifier, transcription, continuation = false) {')[1]
+    .split('\n    onResult(result) {')[0].replace(/\n    },\s*$/, '');
+  const state={ lastVoiceNumber: 1, voiceCounter: 2, voiceIndex: new Map(),
+    pendingSpeakerId: null, pendingSpeakerCount: 0 };
+  const resolve=new Function('identifier','transcription','continuation','State','countWords','Limits',body);
+  const call=(id,cont=false)=>resolve(id,'long enough example',cont,state,t=>t.split(' ').length,{keepCurrentSpeakerMaxWords:4});
+  assert.equal(call('new-id'),1);
+  assert.equal(call('new-id'),2);
+  assert.equal(call('new-id'),2);
 });
