@@ -587,63 +587,7 @@ def translate_text_endpoint(payload: TextTranslationRequest) -> TextTranslationR
 def upload(
     file: UploadFile = File(...),
     target_lang: str = Form('fr', max_length=35, pattern=r'^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$'),
-    primary_lang: str = Form('fr', max_length=35, pattern=r'^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*
-    if not file:
-        raise HTTPException(status_code=400, detail='No file provided')
-
-    target_lang = _sanitize_lang(target_lang)
-    primary_lang = _sanitize_lang(primary_lang)
-
-    filename = file.filename or 'audio.bin'
-    content_type = _guess_content_type(file, filename)
-
-    # This route is intentionally synchronous: Starlette offloads sync
-    # handlers to a worker thread, so the blocking `requests` round-trips
-    # below no longer stall the event loop (and every other request with it).
-    try:
-        contents = file.file.read(int(os.getenv('MAX_AUDIO_BYTES', str(10 * 1024 * 1024))) + 1)
-    finally:
-        file.file.close()
-
-    if len(contents) > int(os.getenv('MAX_AUDIO_BYTES', str(10 * 1024 * 1024))):
-        raise HTTPException(status_code=413, detail='Fichier audio trop volumineux')
-
-    if not contents:
-        raise HTTPException(status_code=400, detail='Uploaded file is empty')
-
-    if _is_small_audio(contents):
-        return {
-            'transcription': '',
-            'detected_lang': '',
-            'diarization': {},
-        }
-
-    try:
-        return process_audio_chunk(
-            filename,
-            content_type,
-            contents,
-            primary_lang,
-            target_lang,
-            context,
-        )
-    except HTTPException:
-        raise
-    except Exception:
-        logger.error('[WHISPER] invalid upstream response')
-        raise HTTPException(status_code=502, detail='Réponse du service audio invalide')
-
-
-# ────────────────────────────── Entrypoint ──────────────────────────────
-if __name__ == '__main__':
-    import uvicorn
-
-    port = int(os.getenv('SERVER_PORT', '8080'))
-    host = os.getenv('SERVER_NAME', '0.0.0.0')
-
-    logger.info('[BOOT] FastAPI server listening on %s:%s', host, port)
-    uvicorn.run('app:app', host=host, port=port, log_level='info')
-),
+    primary_lang: str = Form('fr', max_length=35, pattern=r'^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$'),
     context: str = Form('', max_length=500),
 ) -> Dict[str, Any]:
     if not file:
@@ -683,6 +627,7 @@ if __name__ == '__main__':
             contents,
             primary_lang,
             target_lang,
+            context,
         )
     except HTTPException:
         raise
