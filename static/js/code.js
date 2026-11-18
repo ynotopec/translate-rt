@@ -524,7 +524,8 @@
           onError?.(new Error('Audio playback failed'));
         });
 
-        Recorder.pauseForTTS();
+        // Never suspend incoming speech during playback. Browser AEC is enabled;
+        // headphones are recommended to prevent the synthetic voice being captured.
         await audio.play();
       } catch (err) {
         console.error('Erreur TTS:', err);
