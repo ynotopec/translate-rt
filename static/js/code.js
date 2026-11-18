@@ -105,13 +105,13 @@
     MAX_MESSAGES: 65536,
     MAX_BUFFER_LENGTH: 4,
     minChunkDuration: 1500,
-    maxChunkDuration: 6500,
-    minSilenceMs: 1000,
+    maxChunkDuration: 15000,
+    minSilenceMs: 1200,
     minVoiceMs: 400,
     minSpeechRms: 0.012,
     minSpeechFrames: 6,
     punctuationCheckMs: 3000,
-    punctuationSilenceMs: 300,
+    punctuationSilenceMs: 700,
     TTS_FLUSH_MS: 10000,
     keepCurrentSpeakerMaxWords: 4,
   };
@@ -121,7 +121,7 @@
     alphaNoise: 0.995,
     speechStartMargin: 3.0,
     speechStopMargin: 2.2,
-    silenceHoldMs: 120,
+    silenceHoldMs: 250,
     initNoiseFloor: 0.002,
     intervalMs: 50,
   };
@@ -131,6 +131,10 @@
   // =========================
   const State = {
     mediaRecorder: null,
+    pcmSource: null, pcmNode: null, pcmFrames: [], pcmSamples: 0,
+    captureActive: false, capturePaused: false, captureGeneration: 0,
+    nextSequence: 0, nextResultSequence: 0, pendingResults: new Map(),
+    lastOriginal: '', lastTranslated: '', recentTranscripts: [],
     audioContext: null,
     analyser: null,
     dataArray: null,
@@ -178,142 +182,115 @@
   // =========================
   // Recorder
   // =========================
+  // Continuous microphone capture; independently decodable PCM WAV segments.
+  // ScriptProcessor is a compatibility fallback (AudioWorklet migration is separate).
   const Recorder = {
-    async initStream() {
-      if (State.audioContext) {
-        try { await State.audioContext.close(); } catch {}
-      }
-
-      if (State.stream) {
-        State.stream.getTracks().forEach(t => t.stop());
-      }
-
-      State.stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          noiseSuppression: true,
-          echoCancellation: true,
-          autoGainControl: true,
-          channelCount: 1,
-          sampleRate: 48000
-        }
-      });
-
-      State.audioContext = new AudioContext();
-      State.analyser = State.audioContext.createAnalyser();
-      State.analyser.fftSize = 2048;
-      State.dataArray = new Float32Array(State.analyser.fftSize);
-
-      State.audioContext.createMediaStreamSource(State.stream).connect(State.analyser);
-    },
-
     async start() {
-      if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) {
-        alert('Navigateur non compatible.');
-        return;
+      if (State.captureActive) return;
+      if (!navigator.mediaDevices?.getUserMedia || !window.AudioContext) {
+        alert('Navigateur non compatible.'); return;
       }
-
-      if (State.mediaRecorder && State.mediaRecorder.state !== 'inactive') {
-        return;
-      }
-
-      resetVoiceIndexing();
-      State.textBuffer = '';
-      State.ttsQueue = [];
-      State.ttsInProgress = false;
-      State.currentAudio = null;
-      State.isRestarting = false;
-
-      await Recorder.initStream();
-
-      const mimeType = getSupportedMimeType();
-      State.mediaRecorder = new MediaRecorder(State.stream, mimeType ? { mimeType } : {});
-      console.log('MediaRecorder mimeType :', State.mediaRecorder.mimeType);
-
-      State.audioChunks = [];
-      State.shouldRestartRecording = false;
-      State.hadSpeechSinceResume = false;
-      State.lastChunkHadSpeech = false;
-      VAD.resetSpeechTracking();
-
-      State.mediaRecorder.ondataavailable = (e) => {
-        if (e.data && e.data.size) State.audioChunks.push(e.data);
-      };
-
-      State.mediaRecorder.onstop = () => {
-        const shouldSend = State.lastChunkHadSpeech && State.audioChunks.length > 0;
-
-        if (shouldSend) {
-          const blob = new Blob(State.audioChunks, { type: State.mediaRecorder.mimeType || 'audio/webm' });
-          Network.sendAudio(blob);
-        }
-
-        State.audioChunks = [];
-
-        if (State.shouldRestartRecording) {
-          State.shouldRestartRecording = false;
-          setTimeout(() => Recorder.restart(), 0);
-        }
-      };
-
-      State.mediaRecorder.start();
-      State.recordingStart = now();
-      VAD.start();
-      UI.onRecordingState(true);
-    },
-
-    stop() {
-      State.shouldRestartRecording = false;
-      State.isRestarting = false;
-
-      VAD.stop();
-      VAD.resetSpeechTracking();
-
+      const generation = ++State.captureGeneration;
       try {
-        if (State.mediaRecorder?.state !== 'inactive') {
-          State.mediaRecorder.stop();
+        const stream = await navigator.mediaDevices.getUserMedia({
+          audio: { noiseSuppression: true, echoCancellation: true,
+            autoGainControl: true, channelCount: 1 }
+        });
+        if (generation !== State.captureGeneration) {
+          stream.getTracks().forEach(t => t.stop()); return;
         }
-      } catch {}
-
-      if (State.audioContext) {
-        try { State.audioContext.close(); } catch {}
-      }
-
-      if (State.stream) {
-        State.stream.getTracks().forEach(t => t.stop());
-      }
-
-      TTS.cancelAll();
-      UI.onRecordingState(false);
-    },
-
-    restart() {
-      if (!State.mediaRecorder) return;
-      if (State.isRestarting) return;
-
-      State.isRestarting = true;
-
-      try {
-        State.silenceStart = 0;
-        State.speechStartTime = 0;
-        State.isSpeech = false;
-        State.shouldRestartRecording = false;
-        State.hadSpeechSinceResume = false;
-        State.lastChunkHadSpeech = false;
-        VAD.resetSpeechTracking();
-
-        if (State.mediaRecorder.state === 'paused') {
-          State.mediaRecorder.resume();
-        } else if (State.mediaRecorder.state === 'inactive') {
-          State.mediaRecorder.start();
-        }
-
+        State.stream = stream;
+        State.audioContext = new AudioContext();
+        State.analyser = State.audioContext.createAnalyser();
+        State.analyser.fftSize = 2048;
+        State.dataArray = new Float32Array(2048);
+        State.pcmSource = State.audioContext.createMediaStreamSource(stream);
+        State.pcmNode = State.audioContext.createScriptProcessor(4096, 1, 1);
+        State.pcmSource.connect(State.analyser);
+        State.pcmSource.connect(State.pcmNode);
+        State.pcmNode.connect(State.audioContext.destination);
+        State.pcmNode.onaudioprocess = e => {
+          if (!State.captureActive || State.capturePaused) return;
+          const samples = new Float32Array(e.inputBuffer.getChannelData(0));
+          State.pcmFrames.push(samples);
+          State.pcmSamples += samples.length;
+          if (State.pcmSamples >= State.audioContext.sampleRate * 20) Recorder.flush();
+        };
+        await State.audioContext.resume();
+        resetVoiceIndexing();
+        State.textBuffer = '';
+        State.ttsQueue = []; State.ttsInProgress = false; State.currentAudio = null;
+        State.pcmFrames = []; State.pcmSamples = 0;
+        State.nextSequence = 0; State.nextResultSequence = 0;
+        State.pendingResults.clear(); State.lastOriginal = '';
+        State.lastTranslated = ''; State.recentTranscripts = [];
+        State.captureActive = true; State.capturePaused = false;
         State.recordingStart = now();
-        VAD.start();
-      } catch (e) {
-        console.error('Recorder.restart error:', e);
-      } finally {
-        State.isRestarting = false;
+        VAD.resetSpeechTracking(); VAD.start();
+        UI.onRecordingState(true);
+      } catch (error) {
+        console.error('Audio capture failed:', error);
+        Recorder.stop();
+        showErrorMessage(DOM.transcriptionResult, 'Impossible de démarrer le microphone.');
       }
+    },
+    encodeWav(pcm, rate) {
+      const bytes = new ArrayBuffer(44 + 2 * pcm.length);
+      const v = new DataView(bytes);
+      const str = (at, s) => { for (let i = 0; i < s.length; i++) v.setUint8(at+i, s.charCodeAt(i)); };
+      str(0,'RIFF'); v.setUint32(4,bytes.byteLength-8,true);
+      str(8,'WAVE'); str(12,'fmt '); v.setUint32(16,16,true);
+      v.setUint16(20,1,true); v.setUint16(22,1,true);
+      v.setUint32(24,rate,true); v.setUint32(28,rate*2,true);
+      v.setUint16(32,2,true); v.setUint16(34,16,true);
+      str(36,'data'); v.setUint32(40,2*pcm.length,true);
+      for (let i=0;i<pcm.length;i++) {
+        const s=Math.max(-1,Math.min(1,pcm[i]));
+        v.setInt16(44+2*i,s<0?s*32768:s*32767,true);
+      }
+      return new Blob([bytes],{type:'audio/wav'});
+    },
+    flush(final=false) {
+      if (!State.audioContext || !State.pcmSamples) return;
+      const pcm=new Float32Array(State.pcmSamples);
+      let pos=0;
+      for (const frame of State.pcmFrames) { pcm.set(frame,pos); pos+=frame.length; }
+      if (VAD._shouldSendChunk()) {
+        Network.queueAudio(Recorder.encodeWav(pcm,State.audioContext.sampleRate),State.captureGeneration);
+      }
+      // Only forced speech cuts retain 400ms overlap, never silence boundaries.
+      const overlap=(!final && State.isSpeech)
+        ? Math.min(pcm.length,Math.floor(State.audioContext.sampleRate*0.4)) : 0;
+      State.pcmFrames=overlap?[pcm.slice(-overlap)]:[];
+      State.pcmSamples=overlap;
+      State.recordingStart=now();
+      VAD.resetSpeechTracking();
+    },
+    pauseForTTS() {
+      if (!State.captureActive || State.capturePaused) return;
+      Recorder.flush(); State.capturePaused=true; VAD.stop();
+    },
+    restart() {
+      if (!State.captureActive || !State.capturePaused) return;
+      State.capturePaused=false; State.recordingStart=now();
+      VAD.resetSpeechTracking(); VAD.start();
+    },
+    stop() {
+      ++State.captureGeneration;
+      if (State.captureActive && !State.capturePaused) Recorder.flush(true);
+      State.captureActive=false; State.capturePaused=false;
+      VAD.stop(); VAD.resetSpeechTracking();
+      if (State.pcmNode) {
+        State.pcmNode.onaudioprocess=null; State.pcmNode.disconnect();
+      }
+      State.pcmSource?.disconnect();
+      State.pcmNode=null; State.pcmSource=null;
+      State.audioContext?.close().catch(()=>{});
+      State.audioContext=null;
+      State.stream?.getTracks().forEach(t=>t.stop());
+      State.stream=null;
+      State.pcmFrames=[]; State.pcmSamples=0;
+      TTS.cancelAll(); UI.onRecordingState(false);
     }
   };
 
@@ -349,23 +326,10 @@
       return true;
     },
 
-    _stopAndRestartChunk() {
-      State.lastChunkHadSpeech = VAD._shouldSendChunk();
-      State.shouldRestartRecording = true;
-      VAD.stop();
-
-      try {
-        State.mediaRecorder.stop();
-      } catch {}
-
-      VAD.resetSpeechTracking();
-      State.silenceStart = 0;
-      State.speechStartTime = 0;
-      State.isSpeech = false;
-    },
+    _stopAndRestartChunk() { Recorder.flush(); },
 
     _tick() {
-      if (!State.mediaRecorder || State.mediaRecorder.state !== 'recording') return;
+      if (!State.captureActive || State.capturePaused) return;
       if (!State.analyser || !State.dataArray) return;
 
       State.analyser.getFloatTimeDomainData(State.dataArray);
@@ -451,37 +415,48 @@
   // Réseau
   // =========================
   const Network = {
-    async sendAudio(blob) {
+    queueAudio(blob,generation) {
+      const sequence=State.nextSequence++;
+      const context=State.recentTranscripts.slice(-2).join(' ').slice(-500);
+      Network.sendAudio(blob,sequence,generation,context);
+    },
+    async sendAudio(blob,sequence,generation,context) {
       State.uploadInFlight++;
+      let json;
       try {
-        const ext =
-          blob.type.includes('webm') ? 'webm' :
-          blob.type.includes('ogg')  ? 'ogg'  :
-          blob.type.includes('opus') ? 'ogg'  :
-          'bin';
-
-        const fd = new FormData();
-        fd.append('file', blob, `record.${ext}`);
-        fd.append('target_lang', DOM.langSelect?.value || 'fr');
-        fd.append('primary_lang', DOM.primaryLangSelect?.value || 'fr');
-
-        const res = await fetch(Net.UPLOAD_URL, {
-          method: 'POST',
-          headers: { 'X-Translate-RT': '1' },
-          body: fd
+        const fd=new FormData();
+        fd.append('file',blob,'record.wav');
+        fd.append('target_lang',DOM.langSelect?.value||'fr');
+        fd.append('primary_lang',DOM.primaryLangSelect?.value||'fr');
+        fd.append('context',context);
+        const res=await fetch(Net.UPLOAD_URL,{
+          method:'POST',headers:{'X-Translate-RT':'1'},body:fd
         });
-
-        if (!res.ok) {
-          throw new Error(`Erreur API: ${res.status}`);
-        }
-
-        const json = await res.json();
-        Transcription.onResult(json);
-      } catch (e) {
-        console.error('Erreur upload audio:', e);
-        showErrorMessage(DOM.transcriptionResult, 'Erreur réseau : ' + (e.message || 'inconnue'));
+        if (!res.ok) throw new Error('HTTP '+res.status);
+        json=await res.json();
+      } catch(error) {
+        console.error('Erreur upload audio:',error);
+        json={error:'Erreur réseau : '+(error.message||'inconnue')};
       } finally {
-        State.uploadInFlight = Math.max(0, State.uploadInFlight - 1);
+        State.uploadInFlight=Math.max(0,State.uploadInFlight-1);
+        // Results from prior sessions never enter a new conversation.
+        if (generation===State.captureGeneration ||
+          (generation===State.captureGeneration-1 && !State.captureActive)) {
+          State.pendingResults.set(sequence,json);
+          Network.drainResults();
+        }
+      }
+    },
+    drainResults() {
+      while (State.pendingResults.has(State.nextResultSequence)) {
+        const result=State.pendingResults.get(State.nextResultSequence);
+        State.pendingResults.delete(State.nextResultSequence++);
+        if (result?.error) showErrorMessage(DOM.transcriptionResult,result.error);
+        else if (result?.transcription) {
+          Transcription.onResult(result);
+          State.recentTranscripts.push(result.transcription);
+          if (State.recentTranscripts.length>3) State.recentTranscripts.shift();
+        }
       }
     },
 
@@ -495,10 +470,7 @@
       };
 
       try {
-        if (State.mediaRecorder?.state === 'recording') {
-          VAD.stop();
-          State.mediaRecorder.pause();
-        }
+        // Keep microphone capture active while the TTS request is pending.
 
         const headers = { 'Content-Type': 'application/json', 'X-Translate-RT': '1' };
 
@@ -531,6 +503,7 @@
           onError?.(new Error('Audio playback failed'));
         });
 
+        Recorder.pauseForTTS();
         await audio.play();
       } catch (err) {
         console.error('Erreur TTS:', err);
@@ -541,6 +514,7 @@
           } catch {}
           State.currentAudio = null;
         }
+        Recorder.restart();
         onError?.(err);
       }
     }
@@ -607,6 +581,16 @@
   // Transcription rendering
   // =========================
   const Transcription = {
+    removeOverlap(previous,current) {
+      if (!previous || !current) return current;
+      const left=previous.trim().split(/\\s+/),right=current.trim().split(/\\s+/);
+      const norm=x=>x.toLocaleLowerCase().replace(/^[^\\p{L}\\p{N}]+|[^\\p{L}\\p{N}]+$/gu,'');
+      for (let n=Math.min(16,left.length,right.length);n>=3;n--) {
+        if (left.slice(-n).every((w,i)=>norm(w)===norm(right[i])))
+          return right.slice(n).join(' ');
+      }
+      return current;
+    },
     resetFlushTimer() {
       if (State.flushTimeout) clearTimeout(State.flushTimeout);
 
@@ -649,7 +633,10 @@
     onResult(result) {
       if (result?.diarization?.noise) return;
 
-      const transcription = safeText(result?.transcription || '').trim();
+      let transcription = safeText(result?.transcription || '').trim();
+      const original = transcription;
+      transcription = Transcription.removeOverlap(State.lastOriginal,transcription);
+      if (transcription) State.lastOriginal=original;
       if (!transcription) return;
 
       const rawIdentifier = result?.diarization?.identifier;
@@ -663,7 +650,11 @@
       const outputLang = result.detected_lang === primaryLang ? targetLang : primaryLang;
       const tradKeys = result.detected_lang === outputLang
         ? [] : [`translation_${outputLang}`];
-      const translated = tradKeys.map(k => result?.[k]).find(Boolean) || transcription;
+      let translated = tradKeys.map(k => result?.[k]).find(Boolean) || transcription;
+      if (translated !== original) {
+        translated = Transcription.removeOverlap(State.lastTranslated,translated);
+        if (translated) State.lastTranslated = tradKeys.map(k => result?.[k]).find(Boolean) || '';
+      } else translated = transcription;
 
       const phraseForTTS = (translated && translated !== transcription) ? translated : null;
       const voiceNumber = Transcription._resolveVoiceNumber(identifier, transcription);
