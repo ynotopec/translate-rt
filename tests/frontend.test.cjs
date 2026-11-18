@@ -96,3 +96,20 @@ test('TTS playback pauses capture only after synthesis, before playback', () => 
 test('Unicode word tokenization is actually enabled for replay matching', () => {
   assert.match(source, /text\.match\(\/\[\\p\{L\}\\p\{N\}\]\+\/gu\)/);
 });
+
+test('two-word overlap at a true chunk boundary is removed', () => {
+  const helper=source.split('    repeatedPrefix(previous, current) {')[1].split('\n    removeOverlap(')[0];
+  const words=source.split('    words(text) {')[1].split('\n    // Return the number')[0];
+  const remove=source.split('    removeOverlap(previous,current) {')[1].split('\n    deduplicate(')[0];
+  const t={};
+  t.words=new Function('text',words);
+  t.repeatedPrefix=new Function('previous','current','Transcription',helper).bind(null);
+  const rp=(a,b)=>new Function('previous','current','Transcription',helper)(a,b,t);
+  t.repeatedPrefix=rp;
+  assert.equal(rp('I will feed','feed them'),0);
+  assert.equal(rp("I'll feed", "I'll feed their interviews"),3);
+  assert.equal(rp('It is just a test', 'a test for you'),2);
+  assert.equal(rp('It is just a test', 'it is'),0);
+  const trim=(a,b)=>new Function('previous','current','Transcription',remove)(a,b,t);
+  assert.equal(trim("I'll feed","I'll feed their interviews"),'their interviews');
+});
