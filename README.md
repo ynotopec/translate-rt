@@ -129,21 +129,18 @@ Use the ingress for shared quotas, per-user limits, connection limits and
 slow-upload timeouts across workers/replicas. Text and TTS input are capped at
 20,000 characters.
 
-`TRANSLATE_RT_API_TOKEN` is mandatory and the API refuses to start without it;
-an unset token used to disable authentication entirely. The API also rejects
-`model`, `voice` and `response_format` values that are not on its allow-list, so
-a caller cannot select an arbitrary provider option on your account.
+`TRANSLATE_RT_API_TOKEN` is mandatory and the API refuses to start without it.
+The TTS proxy accepts provider-specific model and voice identifiers (including
+namespaced models and case-sensitive voices) without a local catalogue. It
+validates identifier syntax and parameter types before forwarding requests;
+malformed parameters return 422.
 
-`TTS_ALLOWED_MODELS` and `TTS_ALLOWED_VOICES` are comma-separated lists of exact
-allowed values, defaulting to `gpt-4o-mini-tts` and `alloy` used by the bundled
-frontend. Configure them on the API service when approving other provider options;
-empty lists and `*` are rejected. Invalid option types return 422 before any
-provider call.
-
-With `CORS_ALLOW_CREDENTIALS=true`, use `CORS_ALLOW_ORIGINS` with explicit origins
-or domain suffix entries such as `https://.example.com`. Wildcard origins and
-custom `CORS_ALLOW_ORIGIN_REGEX` are rejected; custom regexes remain available
-without credentials and are checked for valid syntax at startup.
+CORS is same-origin by default. Set `CORS_ALLOW_ORIGINS` or
+`CORS_ALLOW_ORIGIN_REGEX` explicitly for another frontend. Custom regexes also
+work with `CORS_ALLOW_CREDENTIALS=true`; the operator controls their scope.
+Regex syntax is checked at startup, and `CORS_ALLOW_ORIGINS=*` is rejected
+with credentials. Domain suffix entries such as `https://.example.com` remain
+supported.
 
 Translation caching has been removed: `MAX_CACHE_SIZE` no longer has an effect.
 Repeated phrases now call the provider again. Application logs omit payloads and

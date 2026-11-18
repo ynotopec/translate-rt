@@ -58,11 +58,13 @@ def _is_small_audio(data: bytes) -> bool:
     return len(data) < 16_000
 
 
-def _env_allowlist(name: str, default: str) -> frozenset[str]:
-    values = frozenset(value.strip() for value in os.getenv(name, default).split(',') if value.strip())
-    if not values or '*' in values:
-        raise RuntimeError(f'{name} must contain explicit allowed values')
-    return values
+# Validate provider identifiers without imposing a catalogue of models/voices.
+# Namespaced and case-sensitive identifiers are supported for custom providers.
+_PROVIDER_OPTION_RE = re.compile(r'[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}')
+
+
+def _is_safe_provider_option(value: Any) -> bool:
+    return isinstance(value, str) and bool(_PROVIDER_OPTION_RE.fullmatch(value))
 
 
 def _guess_content_type(upload: UploadFile, filename: str) -> str:
@@ -115,8 +117,6 @@ class Cfg:
     DIAR_TOKEN = os.getenv('DIARIZATION_TOKEN')
 
     TTS_API_KEY = os.getenv('TTS_API_KEY')
-    TTS_ALLOWED_MODELS = _env_allowlist('TTS_ALLOWED_MODELS', 'gpt-4o-mini-tts')
-    TTS_ALLOWED_VOICES = _env_allowlist('TTS_ALLOWED_VOICES', 'alloy')
     TTS_URL = os.getenv(
         'TTS_API_URL',
         f'{AI_DEV_API_SCHEME}://api-txt2audio.{AI_DEV_API_DOMAIN}/v1/audio/speech',
@@ -196,13 +196,13 @@ if ALLOW_ORIGIN_REGEX:
     except re.error as exc:
         raise RuntimeError(f'Invalid CORS_ALLOW_ORIGIN_REGEX: {exc}') from exc
 
-# Arbitrary regexes cannot be proven safe by testing a sample origin. With
-# credentials, accept explicit origins and only our escaped domain patterns.
-if Cfg.CORS_ALLOW_CREDENTIALS and ('*' in ALLOW_ORIGINS or Cfg.CORS_ALLOW_ORIGIN_REGEX):
+# Custom regexes are an explicit operator policy, including with credentials.
+# Do not infer their scope from sample hosts. Reject only the wildcard origin
+# configuration here; keep validating regex syntax above.
+if Cfg.CORS_ALLOW_CREDENTIALS and '*' in ALLOW_ORIGINS:
     raise RuntimeError(
-        'Invalid CORS configuration: CORS_ALLOW_CREDENTIALS=true requires '
-        'explicit CORS_ALLOW_ORIGINS (domain suffixes such as https://.example.com '
-        'are supported), without * or CORS_ALLOW_ORIGIN_REGEX'
+        'Invalid CORS configuration: CORS_ALLOW_CREDENTIALS=true cannot be used '
+        'with CORS_ALLOW_ORIGINS=*'
     )
 
 # ────────────────────────────── HTTP session ──────────────────────────────
@@ -558,18 +558,13 @@ def tts_proxy(payload: Dict[str, Any] = Body(...)) -> Response:
     if not isinstance(payload.get('input'), str) or not 0 < len(payload['input']) <= 20000:
         raise HTTPException(status_code=422, detail='Le texte TTS doit contenir entre 1 et 20000 caractères')
 
-    # Only the fields the bundled frontend sends are forwarded. Without this,
-    # a caller could pick an arbitrary provider model or voice on the
-    # operator's account by adding keys to the JSON body.
+    # Forward the supported fields and validate their syntax/types locally.
+    # The configured provider decides which models and voices are available.
     allowed_fields = ('input', 'model', 'voice', 'instructions', 'response_format')
     forwarded = {key: payload[key] for key in allowed_fields if key in payload}
-    if 'model' in forwarded and (
-        not isinstance(forwarded['model'], str) or forwarded['model'] not in Cfg.TTS_ALLOWED_MODELS
-    ):
+    if 'model' in forwarded and not _is_safe_provider_option(forwarded['model']):
         raise HTTPException(status_code=422, detail='Paramètre model invalide')
-    if 'voice' in forwarded and (
-        not isinstance(forwarded['voice'], str) or forwarded['voice'] not in Cfg.TTS_ALLOWED_VOICES
-    ):
+    if 'voice' in forwarded and not _is_safe_provider_option(forwarded['voice']):
         raise HTTPException(status_code=422, detail='Paramètre voice invalide')
     if 'response_format' in forwarded and (
         not isinstance(forwarded['response_format'], str)

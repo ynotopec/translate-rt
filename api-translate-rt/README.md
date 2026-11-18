@@ -70,8 +70,6 @@ Populate the environment variables described below before launching `app.py`. Th
 | `DIARIZATION_TOKEN` | ⚙️ | Enables diarisation calls to `Cfg.DIAR_URL` when present. |
 | `TTS_API_KEY` | ⚙️ | Required for `/tts-proxy` responses. |
 | `TTS_API_URL` | ⚙️ | Overrides the default text-to-speech endpoint. |
-| `TTS_ALLOWED_MODELS` | ⚙️ | Comma-separated model allow-list; defaults to `gpt-4o-mini-tts`. Matching is exact and case-sensitive. Empty lists and `*` are rejected. |
-| `TTS_ALLOWED_VOICES` | ⚙️ | Comma-separated voice allow-list; defaults to `alloy`. Matching is exact and case-sensitive. Empty lists and `*` are rejected. |
 | `SERVER_NAME` | ⚙️ | Host interface for the FastAPI server (defaults to `0.0.0.0`). |
 | `SERVER_PORT` | ⚙️ | Listening port (defaults to `8080`). |
 
