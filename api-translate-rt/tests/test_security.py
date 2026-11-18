@@ -181,7 +181,7 @@ def test_proxy_preserves_multipart_to_real_api(client):
         }, headers={'X-Translate-RT': '1'})
     assert response.status_code == 200
     assert response.json['translation_es'] == 'Hola'
-    assert process.call_args.args[3:] == ('fr', 'es')
+    assert process.call_args.args[3:] == ('fr', 'es', '')
 
 
 def test_concurrency_limit_and_release(monkeypatch):
