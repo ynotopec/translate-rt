@@ -81,3 +81,12 @@ test('overlap removes repeated words but preserves unrelated text', () => {
   assert.equal(f('the president of the United States','of the United States spoke'), 'spoke');
   assert.equal(f('Hello world','another sentence'), 'another sentence');
 });
+
+test('audible audio is submitted even if VAD frame tracking misses it', () => {
+  assert.match(source, /const audible = durationMs >= 500/);
+  assert.match(source, /VAD\._shouldSendChunk\(\) \|\| audible/);
+});
+test('TTS playback no longer suspends continuous microphone capture', () => {
+  const playback = source.split('    async ttsSpeak(')[1].split('  // =========================\n  // TTS Queue')[0];
+  assert.doesNotMatch(playback, /Recorder\.pauseForTTS\(\)/);
+});
