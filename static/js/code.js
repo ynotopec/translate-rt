@@ -132,7 +132,7 @@
   const State = {
     mediaRecorder: null,
     pcmSource: null, pcmNode: null, pcmFrames: [], pcmSamples: 0,
-    pcmEnergy: 0, pcmPeak: 0,
+    pcmEnergy: 0, pcmPeak: 0, pcmSpeechSamples: 0,
     captureActive: false, capturePaused: false, captureGeneration: 0,
     nextSequence: 0, nextResultSequence: 0, pendingResults: new Map(),
     lastOriginal: '', lastTranslated: '', recentTranscripts: [],
@@ -220,10 +220,16 @@
           const samples = new Float32Array(e.inputBuffer.getChannelData(0));
           State.pcmFrames.push(samples);
           State.pcmSamples += samples.length;
+          let energy = 0;
           for (const value of samples) {
-            State.pcmEnergy += value * value;
+            energy += value * value;
             State.pcmPeak = Math.max(State.pcmPeak, Math.abs(value));
           }
+          State.pcmEnergy += energy;
+          // A transient peak is not speech. Require sustained energy measured
+          // over PCM frames when the timer-driven VAD misses voice activity.
+          if (Math.sqrt(energy / samples.length) >= Limits.minSpeechRms)
+            State.pcmSpeechSamples += samples.length;
           if (State.pcmSamples >= State.audioContext.sampleRate * 20) Recorder.flush();
         };
         await State.audioContext.resume();
@@ -231,7 +237,7 @@
         State.textBuffer = '';
         State.ttsQueue = []; State.ttsInProgress = false; State.currentAudio = null;
         State.pcmFrames = []; State.pcmSamples = 0;
-        State.pcmEnergy = 0; State.pcmPeak = 0;
+        State.pcmEnergy = 0; State.pcmPeak = 0; State.pcmSpeechSamples = 0;
         State.nextSequence = 0; State.nextResultSequence = 0;
         State.pendingResults.clear(); State.lastOriginal = '';
         State.lastTranslated = ''; State.recentTranscripts = [];
@@ -272,22 +278,35 @@
       // Its speech-frame counter can miss an utterance or reset at a hard cut.
       const durationMs = pcm.length * 1000 / State.audioContext.sampleRate;
       const rms = Math.sqrt(State.pcmEnergy / Math.max(1, State.pcmSamples));
-      const audible = durationMs >= 500 && (rms >= 0.004 || State.pcmPeak >= 0.025);
+      const speechMs = State.pcmSpeechSamples * 1000 / State.audioContext.sampleRate;
+      const audible = durationMs >= 800 && speechMs >= 300 &&
+        rms >= 0.006;
       if (VAD._shouldSendChunk() || audible) {
         Network.queueAudio(Recorder.encodeWav(pcm,State.audioContext.sampleRate),State.captureGeneration);
       } else if (durationMs >= 500) {
-        console.debug('[audio] silence skipped', {durationMs: Math.round(durationMs), rms});
+        console.debug('[audio] silence skipped', {durationMs: Math.round(durationMs), speechMs: Math.round(speechMs), rms});
       }
       // Forced speech cuts retain a short context tail for Whisper. Silence boundaries are closed cleanly.
       const overlap=(!final && State.isSpeech)
         ? Math.min(pcm.length,Math.floor(State.audioContext.sampleRate*0.4)) : 0;
       State.pcmFrames=overlap?[pcm.slice(-overlap)]:[];
       State.pcmSamples=overlap;
-      State.pcmEnergy=0; State.pcmPeak=0;
+      State.pcmEnergy=0; State.pcmPeak=0; State.pcmSpeechSamples=0;
       if (overlap) {
         for (let i=pcm.length-overlap;i<pcm.length;i++) {
           State.pcmEnergy+=pcm[i]*pcm[i];
           State.pcmPeak=Math.max(State.pcmPeak,Math.abs(pcm[i]));
+        }
+      }
+      if (overlap) {
+        const chunkSize=4096;
+        for (let i=pcm.length-overlap;i<pcm.length;i+=chunkSize) {
+          let energy=0, count=0;
+          for (let j=i;j<Math.min(i+chunkSize,pcm.length);j++) {
+            energy+=pcm[j]*pcm[j]; count++;
+          }
+          if (count && Math.sqrt(energy/count)>=Limits.minSpeechRms)
+            State.pcmSpeechSamples+=count;
         }
       }
       State.recordingStart=now();
@@ -317,7 +336,7 @@
       State.stream?.getTracks().forEach(t=>t.stop());
       State.stream=null;
       State.pcmFrames=[]; State.pcmSamples=0;
-      State.pcmEnergy=0; State.pcmPeak=0;
+      State.pcmEnergy=0; State.pcmPeak=0; State.pcmSpeechSamples=0;
       TTS.cancelAll(); UI.onRecordingState(false);
     }
   };
