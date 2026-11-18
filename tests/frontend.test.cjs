@@ -14,6 +14,7 @@ function render(result, target = 'es', primary = 'fr') {
     deduplicate: (current, _history) => current,
     isPlaybackEcho: () => false,
     repeatedPrefix: () => 0,
+    words: t => (t.match(/[\p{L}\p{N}]+/gu) || []).map(w => w.toLowerCase()),
     _pushToDom: value => { rendered = value; },
     resetFlushTimer() {},
   };
@@ -132,7 +133,7 @@ test('new diarization IDs require confirmation before changing speaker', () => {
   const state={ lastVoiceNumber: 1, voiceCounter: 2, voiceIndex: new Map(),
     pendingSpeakerId: null, pendingSpeakerCount: 0 };
   const resolve=new Function('identifier','transcription','continuation','State','countWords','Limits',body);
-  const call=(id,cont=false)=>resolve(id,'long enough example',cont,state,t=>t.split(' ').length,{keepCurrentSpeakerMaxWords:4});
+  const call=(id,cont=false)=>resolve(id,'a sufficiently long example of speech',cont,state,t=>t.split(' ').length,{keepCurrentSpeakerMaxWords:4});
   assert.equal(call('new-id'),1);
   assert.equal(call('new-id'),2);
   assert.equal(call('new-id'),2);
