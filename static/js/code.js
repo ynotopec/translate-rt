@@ -268,7 +268,7 @@
     },
     pauseForTTS() {
       if (!State.captureActive || State.capturePaused) return;
-      Recorder.flush(); State.capturePaused=true; VAD.stop();
+      Recorder.flush(true); State.capturePaused=true; VAD.stop();
     },
     restart() {
       if (!State.captureActive || !State.capturePaused) return;
