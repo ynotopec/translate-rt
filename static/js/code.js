@@ -132,6 +132,7 @@
   const State = {
     mediaRecorder: null,
     pcmSource: null, pcmNode: null, pcmFrames: [], pcmSamples: 0,
+    pcmEnergy: 0, pcmPeak: 0,
     captureActive: false, capturePaused: false, captureGeneration: 0,
     nextSequence: 0, nextResultSequence: 0, pendingResults: new Map(),
     lastOriginal: '', lastTranslated: '', recentTranscripts: [],
@@ -214,6 +215,10 @@
           const samples = new Float32Array(e.inputBuffer.getChannelData(0));
           State.pcmFrames.push(samples);
           State.pcmSamples += samples.length;
+          for (const value of samples) {
+            State.pcmEnergy += value * value;
+            State.pcmPeak = Math.max(State.pcmPeak, Math.abs(value));
+          }
           if (State.pcmSamples >= State.audioContext.sampleRate * 20) Recorder.flush();
         };
         await State.audioContext.resume();
@@ -221,6 +226,7 @@
         State.textBuffer = '';
         State.ttsQueue = []; State.ttsInProgress = false; State.currentAudio = null;
         State.pcmFrames = []; State.pcmSamples = 0;
+        State.pcmEnergy = 0; State.pcmPeak = 0;
         State.nextSequence = 0; State.nextResultSequence = 0;
         State.pendingResults.clear(); State.lastOriginal = '';
         State.lastTranslated = ''; State.recentTranscripts = [];
@@ -255,14 +261,28 @@
       const pcm=new Float32Array(State.pcmSamples);
       let pos=0;
       for (const frame of State.pcmFrames) { pcm.set(frame,pos); pos+=frame.length; }
-      if (VAD._shouldSendChunk()) {
+      // The VAD decides *when* to cut, not whether audible audio exists.
+      // Its speech-frame counter can miss an utterance or reset at a hard cut.
+      const durationMs = pcm.length * 1000 / State.audioContext.sampleRate;
+      const rms = Math.sqrt(State.pcmEnergy / Math.max(1, State.pcmSamples));
+      const audible = durationMs >= 500 && (rms >= 0.004 || State.pcmPeak >= 0.025);
+      if (VAD._shouldSendChunk() || audible) {
         Network.queueAudio(Recorder.encodeWav(pcm,State.audioContext.sampleRate),State.captureGeneration);
+      } else if (durationMs >= 500) {
+        console.debug('[audio] silence skipped', {durationMs: Math.round(durationMs), rms});
       }
       // Only forced speech cuts retain 400ms overlap, never silence boundaries.
       const overlap=(!final && State.isSpeech)
         ? Math.min(pcm.length,Math.floor(State.audioContext.sampleRate*0.4)) : 0;
       State.pcmFrames=overlap?[pcm.slice(-overlap)]:[];
       State.pcmSamples=overlap;
+      State.pcmEnergy=0; State.pcmPeak=0;
+      if (overlap) {
+        for (let i=pcm.length-overlap;i<pcm.length;i++) {
+          State.pcmEnergy+=pcm[i]*pcm[i];
+          State.pcmPeak=Math.max(State.pcmPeak,Math.abs(pcm[i]));
+        }
+      }
       State.recordingStart=now();
       VAD.resetSpeechTracking();
     },
@@ -290,6 +310,7 @@
       State.stream?.getTracks().forEach(t=>t.stop());
       State.stream=null;
       State.pcmFrames=[]; State.pcmSamples=0;
+      State.pcmEnergy=0; State.pcmPeak=0;
       TTS.cancelAll(); UI.onRecordingState(false);
     }
   };
@@ -631,7 +652,8 @@
     },
 
     onResult(result) {
-      if (result?.diarization?.noise) return;
+      // Diarization noise classification must not discard a valid STT result.
+      if (result?.diarization?.noise && !result?.transcription?.trim()) return;
 
       let transcription = safeText(result?.transcription || '').trim();
       const original = transcription;
