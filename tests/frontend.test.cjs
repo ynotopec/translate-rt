@@ -98,12 +98,11 @@ test('Unicode word tokenization is actually enabled for replay matching', () => 
 });
 
 test('two-word overlap at a true chunk boundary is removed', () => {
-  const helper=source.split('    repeatedPrefix(previous, current) {')[1].split('\n    removeOverlap(')[0];
-  const words=source.split('    words(text) {')[1].split('\n    // Return the number')[0];
-  const remove=source.split('    removeOverlap(previous,current) {')[1].split('\n    deduplicate(')[0];
+  const helper=source.split('    repeatedPrefix(previous, current) {')[1].split('\n    },')[0];
+  const words=source.split('    words(text) {')[1].split('\n    },')[0];
+  const remove=source.split('    removeOverlap(previous,current) {')[1].split('\n    },')[0];
   const t={};
   t.words=new Function('text',words);
-  t.repeatedPrefix=new Function('previous','current','Transcription',helper).bind(null);
   const rp=(a,b)=>new Function('previous','current','Transcription',helper)(a,b,t);
   t.repeatedPrefix=rp;
   assert.equal(rp('I will feed','feed them'),0);
