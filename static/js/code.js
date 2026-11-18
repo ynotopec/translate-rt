@@ -137,6 +137,7 @@
     nextSequence: 0, nextResultSequence: 0, pendingResults: new Map(),
     lastOriginal: '', lastTranslated: '', recentTranscripts: [],
     recentRenderedSources: [], recentTranslatedSources: [], recentTtsPhrases: [],
+    lastShortResult: '', lastShortResultAt: 0,
     audioContext: null,
     analyser: null,
     dataArray: null,
@@ -243,6 +244,7 @@
         State.lastTranslated = ''; State.recentTranscripts = [];
         State.recentRenderedSources = []; State.recentTranslatedSources = [];
         State.recentTtsPhrases = [];
+        State.lastShortResult = ''; State.lastShortResultAt = 0;
         State.captureActive = true; State.capturePaused = false;
         State.recordingStart = now();
         VAD.resetSpeechTracking(); VAD.start();
@@ -755,6 +757,16 @@
 
       const original = safeText(result?.transcription || '').trim();
       if (!original || Transcription.isPlaybackEcho(original)) return;
+      // Suppress ASR loops on silence (e.g. 'you', 'you', 'you'), but
+      // preserve the first short utterance and any different utterance.
+      const tokens = Transcription.words(original);
+      const short = tokens.length <= 2;
+      const key = tokens.join(' ');
+      const clock = now();
+      if (short && key && key === State.lastShortResult &&
+          clock - State.lastShortResultAt < 10000) return;
+      State.lastShortResult = short ? key : '';
+      State.lastShortResultAt = clock;
       const preceding = State.recentRenderedSources.at(-1) || '';
       const continuation = Transcription.repeatedPrefix(preceding, original) >= 2;
       const transcription = Transcription.deduplicate(original,State.recentRenderedSources);
