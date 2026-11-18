@@ -459,7 +459,11 @@ def process_audio_chunk(
     translations: Dict[str, str] = {}
     try:
         if transcription and transcription.lower() not in FILTER_NORMALIZED:
-            detected_lang = detect_language(transcription)
+            # Prefer the speech model's audio-language decision when available.
+            # Text-only detection is unstable on tiny fragments ("explains abstract
+            # concepts"), especially after code-switching.
+            whisper_lang = _sanitize_lang(whisper_payload.get('language', ''), '')
+            detected_lang = whisper_lang or detect_language(transcription)
             translations = build_translations(
                 transcription,
                 detected_lang,
