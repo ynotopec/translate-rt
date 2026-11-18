@@ -142,3 +142,10 @@ test('short repeated ASR hallucinations are throttled, not the first utterance',
   assert.match(source, /tokens\.length <= 2/);
   assert.match(source, /clock - State\.lastShortResultAt < 10000/);
 });
+
+test('diarization noise takes precedence over hallucinated STT text', () => {
+  const handler=source.split('    onResult(result) {')[1].split('\n    _pushToDom(')[0];
+  assert.match(handler, /result\?\.diarization\?\.noise\) return/);
+  const drain=source.split('    drainResults() {')[1].split('\n    async ttsSpeak(')[0];
+  assert.match(drain, /result\?\.transcription && !result\?\.diarization\?\.noise/);
+});
