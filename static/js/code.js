@@ -501,7 +501,7 @@
         const result=State.pendingResults.get(State.nextResultSequence);
         State.pendingResults.delete(State.nextResultSequence++);
         if (result?.error) showErrorMessage(DOM.transcriptionResult,result.error);
-        else if (result?.transcription) {
+        else if (result?.transcription && !result?.diarization?.noise) {
           Transcription.onResult(result);
           State.recentTranscripts.push(result.transcription);
           if (State.recentTranscripts.length>3) State.recentTranscripts.shift();
@@ -752,8 +752,9 @@
     },
 
     onResult(result) {
-      // Diarization noise classification must not discard a valid STT result.
-      if (result?.diarization?.noise && !result?.transcription?.trim()) return;
+      // Preserve the diarization service's explicit noise decision. Whisper
+      // may hallucinate fluent words on noise; STT text is not proof of speech.
+      if (result?.diarization?.noise) return;
 
       const original = safeText(result?.transcription || '').trim();
       if (!original || Transcription.isPlaybackEcho(original)) return;
