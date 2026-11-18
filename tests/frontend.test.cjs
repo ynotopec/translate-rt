@@ -10,6 +10,7 @@ function render(result, target = 'es', primary = 'fr') {
   let rendered;
   const transcription = {
     _resolveVoiceNumber: () => 1,
+    removeOverlap: (_previous, current) => current,
     _pushToDom: value => { rendered = value; },
     resetFlushTimer() {},
   };
