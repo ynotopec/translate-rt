@@ -104,14 +104,14 @@
   const Limits = {
     MAX_MESSAGES: 65536,
     MAX_BUFFER_LENGTH: 4,
-    minChunkDuration: 1500,
-    maxChunkDuration: 12000,
+    minChunkDuration: 2000,
+    maxChunkDuration: 10000,
     minSilenceMs: 1100,
     minVoiceMs: 400,
     minSpeechRms: 0.012,
     minSpeechFrames: 6,
-    punctuationCheckMs: 3000,
-    punctuationSilenceMs: 750,
+    punctuationCheckMs: 2000,
+    punctuationSilenceMs: 380,
     TTS_FLUSH_MS: 10000,
     keepCurrentSpeakerMaxWords: 4,
   };
@@ -121,7 +121,7 @@
     alphaNoise: 0.995,
     speechStartMargin: 3.0,
     speechStopMargin: 2.2,
-    silenceHoldMs: 300,
+    silenceHoldMs: 200,
     initNoiseFloor: 0.002,
     intervalMs: 50,
   };
