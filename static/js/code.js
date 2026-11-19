@@ -104,14 +104,14 @@
   const Limits = {
     MAX_MESSAGES: 65536,
     MAX_BUFFER_LENGTH: 4,
-    minChunkDuration: 2500,
-    maxChunkDuration: 9000,
-    minSilenceMs: 800,
+    minChunkDuration: 1500,
+    maxChunkDuration: 12000,
+    minSilenceMs: 1100,
     minVoiceMs: 400,
     minSpeechRms: 0.012,
     minSpeechFrames: 6,
     punctuationCheckMs: 3000,
-    punctuationSilenceMs: 800,
+    punctuationSilenceMs: 750,
     TTS_FLUSH_MS: 10000,
     keepCurrentSpeakerMaxWords: 4,
   };
@@ -121,7 +121,7 @@
     alphaNoise: 0.995,
     speechStartMargin: 3.0,
     speechStopMargin: 2.2,
-    silenceHoldMs: 250,
+    silenceHoldMs: 300,
     initNoiseFloor: 0.002,
     intervalMs: 50,
   };
@@ -131,14 +131,6 @@
   // =========================
   const State = {
     mediaRecorder: null,
-    pcmSource: null, pcmNode: null, pcmFrames: [], pcmSamples: 0,
-    pcmEnergy: 0, pcmPeak: 0, pcmSpeechSamples: 0,
-    captureActive: false, capturePaused: false, captureGeneration: 0,
-    nextSequence: 0, nextResultSequence: 0, pendingResults: new Map(),
-    lastOriginal: '', lastTranslated: '', recentTranscripts: [],
-    recentRenderedSources: [], recentTranslatedSources: [], recentTtsPhrases: [],
-    lastShortResult: '', lastShortResultAt: 0,
-    audioDebug: false,
     audioContext: null,
     analyser: null,
     dataArray: null,
@@ -153,7 +145,7 @@
     totalSpeechFrames: 0,
 
     // VAD
-    levelEMA: 0,
+    levelEMA: null,
     noiseFloor: VADParams.initNoiseFloor,
     speechStartTime: 0,
     silenceStart: 0,
@@ -163,8 +155,6 @@
     // Diarisation / affichage
     voiceIndex: new Map(),          // identifier -> confirmed voiceNumber
     voiceCounter: 1,
-    pendingSpeakerId: null,
-    pendingSpeakerCount: 0,
     textBuffer: '',
     lastVoiceNumber: null,
     flushTimeout: null,
@@ -182,191 +172,147 @@
   const resetVoiceIndexing = () => {
     State.voiceIndex.clear();
     State.voiceCounter = 1;
-    State.pendingSpeakerId = null;
-    State.pendingSpeakerCount = 0;
     State.lastVoiceNumber = null;
   };
 
   // =========================
   // Recorder
   // =========================
-  // Continuous microphone capture; independently decodable PCM WAV segments.
-  // ScriptProcessor is a compatibility fallback (AudioWorklet migration is separate).
   const Recorder = {
-    async start() {
-      if (State.captureActive) return;
-      if (!navigator.mediaDevices?.getUserMedia || !window.AudioContext) {
-        alert('Navigateur non compatible.'); return;
+    async initStream() {
+      if (State.audioContext) {
+        try { await State.audioContext.close(); } catch {}
       }
-      const generation = ++State.captureGeneration;
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          audio: { noiseSuppression: true, echoCancellation: true,
-            autoGainControl: true, channelCount: 1 }
-        });
-        if (generation !== State.captureGeneration) {
-          stream.getTracks().forEach(t => t.stop()); return;
+
+      if (State.stream) {
+        State.stream.getTracks().forEach(t => t.stop());
+      }
+
+      State.stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          noiseSuppression: true,
+          echoCancellation: true,
+          autoGainControl: true,
+          channelCount: 1
         }
-        State.stream = stream;
-        State.audioContext = new AudioContext();
-        State.analyser = State.audioContext.createAnalyser();
-        State.analyser.fftSize = 2048;
-        State.dataArray = new Float32Array(2048);
-        State.pcmSource = State.audioContext.createMediaStreamSource(stream);
-        State.pcmNode = State.audioContext.createScriptProcessor(4096, 1, 1);
-        State.pcmSource.connect(State.analyser);
-        State.pcmSource.connect(State.pcmNode);
-        State.pcmNode.connect(State.audioContext.destination);
-        State.pcmNode.onaudioprocess = e => {
-          if (!State.captureActive || State.capturePaused) return;
-          const samples = new Float32Array(e.inputBuffer.getChannelData(0));
-          State.pcmFrames.push(samples);
-          State.pcmSamples += samples.length;
-          let energy = 0;
-          for (const value of samples) {
-            energy += value * value;
-            State.pcmPeak = Math.max(State.pcmPeak, Math.abs(value));
-          }
-          State.pcmEnergy += energy;
-          // A transient peak is not speech. Require sustained energy measured
-          // over PCM frames when the timer-driven VAD misses voice activity.
-          if (Math.sqrt(energy / samples.length) >= Limits.minSpeechRms)
-            State.pcmSpeechSamples += samples.length;
-          if (State.pcmSamples >= State.audioContext.sampleRate * 20) Recorder.flush();
-        };
-        await State.audioContext.resume();
-        resetVoiceIndexing();
-        State.textBuffer = '';
-        State.ttsQueue = []; State.ttsInProgress = false; State.currentAudio = null;
-        State.pcmFrames = []; State.pcmSamples = 0;
-        State.pcmEnergy = 0; State.pcmPeak = 0; State.pcmSpeechSamples = 0;
-        State.nextSequence = 0; State.nextResultSequence = 0;
-        State.pendingResults.clear(); State.lastOriginal = '';
-        State.lastTranslated = ''; State.recentTranscripts = [];
-        State.recentRenderedSources = []; State.recentTranslatedSources = [];
-        State.recentTtsPhrases = [];
-        State.audioDebug = localStorage.getItem('audioDebug') === '1';
-        State.lastShortResult = ''; State.lastShortResultAt = 0;
-        State.captureActive = true; State.capturePaused = false;
-        State.recordingStart = now();
-        VAD.resetSpeechTracking(); VAD.start();
-        UI.onRecordingState(true);
-      } catch (error) {
-        console.error('Audio capture failed:', error);
-        Recorder.stop();
-        showErrorMessage(DOM.transcriptionResult, 'Impossible de démarrer le microphone.');
-      }
-    },
-    encodeWav(pcm, rate) {
-      const bytes = new ArrayBuffer(44 + 2 * pcm.length);
-      const v = new DataView(bytes);
-      const str = (at, s) => { for (let i = 0; i < s.length; i++) v.setUint8(at+i, s.charCodeAt(i)); };
-      str(0,'RIFF'); v.setUint32(4,bytes.byteLength-8,true);
-      str(8,'WAVE'); str(12,'fmt '); v.setUint32(16,16,true);
-      v.setUint16(20,1,true); v.setUint16(22,1,true);
-      v.setUint32(24,rate,true); v.setUint32(28,rate*2,true);
-      v.setUint16(32,2,true); v.setUint16(34,16,true);
-      str(36,'data'); v.setUint32(40,2*pcm.length,true);
-      for (let i=0;i<pcm.length;i++) {
-        const s=Math.max(-1,Math.min(1,pcm[i]));
-        v.setInt16(44+2*i,s<0?s*32768:s*32767,true);
-      }
-      return new Blob([bytes],{type:'audio/wav'});
-    },
-    // Reduce WAV payload size (48kHz -> 16kHz, ~3x smaller). A weighted
-    // box filter averages source samples instead of simply decimating.
-    downsample(pcm, sourceRate, targetRate=16000) {
-      if (sourceRate <= targetRate) return {pcm, rate:sourceRate};
-      const length=Math.ceil(pcm.length*targetRate/sourceRate);
-      const result=new Float32Array(length);
-      const ratio=sourceRate/targetRate;
-      for (let i=0;i<length;i++) {
-        const left=i*ratio, right=Math.min(pcm.length,(i+1)*ratio);
-        let sum=0;
-        for (let j=Math.floor(left);j<Math.ceil(right);j++) {
-          const weight=Math.min(right,j+1)-Math.max(left,j);
-          if (weight>0) sum+=pcm[j]*weight;
-        }
-        result[i]=sum/(right-left);
-      }
-      return {pcm:result,rate:targetRate};
-    },
-    flush(final=false) {
-      if (!State.audioContext || !State.pcmSamples) return;
-      const pcm=new Float32Array(State.pcmSamples);
-      let pos=0;
-      for (const frame of State.pcmFrames) { pcm.set(frame,pos); pos+=frame.length; }
-      // The VAD decides *when* to cut, not whether audible audio exists.
-      // Its speech-frame counter can miss an utterance or reset at a hard cut.
-      const durationMs = pcm.length * 1000 / State.audioContext.sampleRate;
-      const rms = Math.sqrt(State.pcmEnergy / Math.max(1, State.pcmSamples));
-      const speechMs = State.pcmSpeechSamples * 1000 / State.audioContext.sampleRate;
-      const audible = durationMs >= 800 && speechMs >= 300 &&
-        rms >= 0.006;
-      const vadAccepted = VAD._shouldSendChunk();
-      if (State.audioDebug) console.debug('[audio-window]', {
-        durationMs: Math.round(durationMs), speechMs: Math.round(speechMs),
-        rms: Number(rms.toFixed(4)), vadAccepted, audible,
-        disposition: vadAccepted || audible ? 'upload' : 'skip'
       });
-      if (vadAccepted || audible) {
-        const reduced=Recorder.downsample(pcm,State.audioContext.sampleRate);
-        Network.queueAudio(Recorder.encodeWav(reduced.pcm,reduced.rate),State.captureGeneration);
-      } else if (durationMs >= 500) {
-        console.debug('[audio] silence skipped', {durationMs: Math.round(durationMs), speechMs: Math.round(speechMs), rms});
+
+      State.audioContext = new AudioContext();
+      State.analyser = State.audioContext.createAnalyser();
+      State.analyser.fftSize = 2048;
+      State.dataArray = new Float32Array(State.analyser.fftSize);
+
+      State.audioContext.createMediaStreamSource(State.stream).connect(State.analyser);
+    },
+
+    async start() {
+      if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) {
+        alert('Navigateur non compatible.');
+        return;
       }
-      // Forced speech cuts retain a short context tail for Whisper. Silence boundaries are closed cleanly.
-      const overlap=(!final && State.isSpeech)
-        ? Math.min(pcm.length,Math.floor(State.audioContext.sampleRate*0.4)) : 0;
-      State.pcmFrames=overlap?[pcm.slice(-overlap)]:[];
-      State.pcmSamples=overlap;
-      State.pcmEnergy=0; State.pcmPeak=0; State.pcmSpeechSamples=0;
-      if (overlap) {
-        for (let i=pcm.length-overlap;i<pcm.length;i++) {
-          State.pcmEnergy+=pcm[i]*pcm[i];
-          State.pcmPeak=Math.max(State.pcmPeak,Math.abs(pcm[i]));
-        }
+
+      if (State.mediaRecorder && State.mediaRecorder.state !== 'inactive') {
+        return;
       }
-      if (overlap) {
-        const chunkSize=4096;
-        for (let i=pcm.length-overlap;i<pcm.length;i+=chunkSize) {
-          let energy=0, count=0;
-          for (let j=i;j<Math.min(i+chunkSize,pcm.length);j++) {
-            energy+=pcm[j]*pcm[j]; count++;
-          }
-          if (count && Math.sqrt(energy/count)>=Limits.minSpeechRms)
-            State.pcmSpeechSamples+=count;
-        }
-      }
-      State.recordingStart=now();
+
+      resetVoiceIndexing();
+      State.textBuffer = '';
+      State.ttsQueue = [];
+      State.ttsInProgress = false;
+      State.currentAudio = null;
+      State.isRestarting = false;
+
+      await Recorder.initStream();
+
+      const mimeType = getSupportedMimeType();
+      State.mediaRecorder = new MediaRecorder(State.stream, mimeType ? { mimeType } : {});
+      console.log('MediaRecorder mimeType :', State.mediaRecorder.mimeType);
+
+      State.audioChunks = [];
+      State.shouldRestartRecording = false;
+      State.hadSpeechSinceResume = false;
+      State.lastChunkHadSpeech = false;
       VAD.resetSpeechTracking();
+
+      State.mediaRecorder.ondataavailable = (e) => {
+        if (e.data && e.data.size) State.audioChunks.push(e.data);
+      };
+
+      State.mediaRecorder.onstop = () => {
+        const shouldSend = State.lastChunkHadSpeech && State.audioChunks.length > 0;
+
+        if (shouldSend) {
+          const blob = new Blob(State.audioChunks, { type: State.mediaRecorder.mimeType || 'audio/webm' });
+          Network.sendAudio(blob);
+        }
+
+        State.audioChunks = [];
+
+        if (State.shouldRestartRecording) {
+          State.shouldRestartRecording = false;
+          setTimeout(() => Recorder.restart(), 0);
+        }
+      };
+
+      State.mediaRecorder.start();
+      State.recordingStart = now();
+      VAD.start();
+      UI.onRecordingState(true);
     },
-    pauseForTTS() {
-      if (!State.captureActive || State.capturePaused) return;
-      Recorder.flush(true); State.capturePaused=true; VAD.stop();
-    },
-    restart() {
-      if (!State.captureActive || !State.capturePaused) return;
-      State.capturePaused=false; State.recordingStart=now();
-      VAD.resetSpeechTracking(); VAD.start();
-    },
+
     stop() {
-      ++State.captureGeneration;
-      if (State.captureActive && !State.capturePaused) Recorder.flush(true);
-      State.captureActive=false; State.capturePaused=false;
-      VAD.stop(); VAD.resetSpeechTracking();
-      if (State.pcmNode) {
-        State.pcmNode.onaudioprocess=null; State.pcmNode.disconnect();
+      State.shouldRestartRecording = false;
+      State.isRestarting = false;
+
+      VAD.stop();
+      VAD.resetSpeechTracking();
+
+      try {
+        if (State.mediaRecorder?.state !== 'inactive') {
+          State.mediaRecorder.stop();
+        }
+      } catch {}
+
+      if (State.audioContext) {
+        try { State.audioContext.close(); } catch {}
       }
-      State.pcmSource?.disconnect();
-      State.pcmNode=null; State.pcmSource=null;
-      State.audioContext?.close().catch(()=>{});
-      State.audioContext=null;
-      State.stream?.getTracks().forEach(t=>t.stop());
-      State.stream=null;
-      State.pcmFrames=[]; State.pcmSamples=0;
-      State.pcmEnergy=0; State.pcmPeak=0; State.pcmSpeechSamples=0;
-      TTS.cancelAll(); UI.onRecordingState(false);
+
+      if (State.stream) {
+        State.stream.getTracks().forEach(t => t.stop());
+      }
+
+      TTS.cancelAll();
+      UI.onRecordingState(false);
+    },
+
+    restart() {
+      if (!State.mediaRecorder) return;
+      if (State.isRestarting) return;
+
+      State.isRestarting = true;
+
+      try {
+        State.silenceStart = 0;
+        State.speechStartTime = 0;
+        State.isSpeech = false;
+        State.shouldRestartRecording = false;
+        State.hadSpeechSinceResume = false;
+        State.lastChunkHadSpeech = false;
+        VAD.resetSpeechTracking();
+
+        if (State.mediaRecorder.state === 'paused') {
+          State.mediaRecorder.resume();
+        } else if (State.mediaRecorder.state === 'inactive') {
+          State.mediaRecorder.start();
+        }
+
+        State.recordingStart = now();
+        VAD.start();
+      } catch (e) {
+        console.error('Recorder.restart error:', e);
+      } finally {
+        State.isRestarting = false;
+      }
     }
   };
 
@@ -390,6 +336,7 @@
       State.hadSpeechSinceResume = false;
       State.maxRmsSinceResume = 0;
       State.totalSpeechFrames = 0;
+      State.levelEMA = null;
       State.isSpeech = false;
       State.speechStartTime = 0;
       State.silenceStart = 0;
@@ -402,10 +349,23 @@
       return true;
     },
 
-    _stopAndRestartChunk() { Recorder.flush(); },
+    _stopAndRestartChunk() {
+      State.lastChunkHadSpeech = VAD._shouldSendChunk();
+      State.shouldRestartRecording = true;
+      VAD.stop();
+
+      try {
+        State.mediaRecorder.stop();
+      } catch {}
+
+      VAD.resetSpeechTracking();
+      State.silenceStart = 0;
+      State.speechStartTime = 0;
+      State.isSpeech = false;
+    },
 
     _tick() {
-      if (!State.captureActive || State.capturePaused) return;
+      if (!State.mediaRecorder || State.mediaRecorder.state !== 'recording') return;
       if (!State.analyser || !State.dataArray) return;
 
       State.analyser.getFloatTimeDomainData(State.dataArray);
@@ -422,7 +382,9 @@
 
       const rms = Math.sqrt(sumSquares / State.dataArray.length);
 
-      State.levelEMA = VADParams.alphaLevel * State.levelEMA + (1 - VADParams.alphaLevel) * rms;
+      State.levelEMA = State.levelEMA === null
+        ? rms
+        : VADParams.alphaLevel * State.levelEMA + (1 - VADParams.alphaLevel) * rms;
 
       const speechStartThreshold = State.noiseFloor * VADParams.speechStartMargin;
       const speechStopThreshold = State.noiseFloor * VADParams.speechStopMargin;
@@ -435,7 +397,7 @@
         }
 
         State.silenceStart = 0;
-        State.maxRmsSinceResume = Math.max(State.maxRmsSinceResume, peak || rms);
+        State.maxRmsSinceResume = Math.max(State.maxRmsSinceResume, rms);
         State.totalSpeechFrames++;
 
         if (!State.hadSpeechSinceResume && (t - State.speechStartTime > Limits.minVoiceMs)) {
@@ -491,59 +453,37 @@
   // Réseau
   // =========================
   const Network = {
-    queueAudio(blob,generation) {
-      const sequence=State.nextSequence++;
-      const context=State.recentTranscripts.slice(-2).join(' ').slice(-500);
-      Network.sendAudio(blob,sequence,generation,context,performance.now());
-    },
-    async sendAudio(blob,sequence,generation,context,queuedAt) {
+    async sendAudio(blob) {
       State.uploadInFlight++;
-      let json;
       try {
-        const fd=new FormData();
-        fd.append('file',blob,'record.wav');
-        fd.append('target_lang',DOM.langSelect?.value||'fr');
-        fd.append('primary_lang',DOM.primaryLangSelect?.value||'fr');
-        fd.append('context',context);
-        const res=await fetch(Net.UPLOAD_URL,{
-          method:'POST',headers:{'X-Translate-RT':'1'},body:fd
+        const ext =
+          blob.type.includes('webm') ? 'webm' :
+          blob.type.includes('ogg')  ? 'ogg'  :
+          blob.type.includes('opus') ? 'ogg'  :
+          'bin';
+
+        const fd = new FormData();
+        fd.append('file', blob, `record.${ext}`);
+        fd.append('target_lang', DOM.langSelect?.value || 'fr');
+        fd.append('primary_lang', DOM.primaryLangSelect?.value || 'fr');
+
+        const res = await fetch(Net.UPLOAD_URL, {
+          method: 'POST',
+          headers: { 'X-Translate-RT': '1' },
+          body: fd
         });
-        if (!res.ok) throw new Error('HTTP '+res.status);
-        json=await res.json();
-        if (State.audioDebug) console.debug('[audio-latency]', {
-          sequence, uploadKB:Math.round(blob.size/1024),
-          networkMs:Math.round(performance.now()-queuedAt)
-        });
-      } catch(error) {
-        console.error('Erreur upload audio:',error);
-        json={error:'Erreur réseau : '+(error.message||'inconnue')};
+
+        if (!res.ok) {
+          throw new Error(`Erreur API: ${res.status}`);
+        }
+
+        const json = await res.json();
+        Transcription.onResult(json);
+      } catch (e) {
+        console.error('Erreur upload audio:', e);
+        showErrorMessage(DOM.transcriptionResult, 'Erreur réseau : ' + (e.message || 'inconnue'));
       } finally {
-        State.uploadInFlight=Math.max(0,State.uploadInFlight-1);
-        // Results from prior sessions never enter a new conversation.
-        if (generation===State.captureGeneration ||
-          (generation===State.captureGeneration-1 && !State.captureActive)) {
-          State.pendingResults.set(sequence,{result:json,receivedAt:performance.now()});
-          Network.drainResults();
-        }
-      }
-    },
-    drainResults() {
-      while (State.pendingResults.has(State.nextResultSequence)) {
-        const item=State.pendingResults.get(State.nextResultSequence);
-        State.pendingResults.delete(State.nextResultSequence++);
-        const result=item.result;
-        if (State.audioDebug) console.debug('[audio-display]', {
-          sequence:State.nextResultSequence-1,
-          reorderWaitMs:Math.round(performance.now()-item.receivedAt)
-        });
-        if (result?.error) showErrorMessage(DOM.transcriptionResult,result.error);
-        else if (result?.diarization?.noise) {
-          if (State.audioDebug) console.debug('[diarization] rejected noise');
-        } else if (result?.transcription) {
-          Transcription.onResult(result);
-          State.recentTranscripts.push(result.transcription);
-          if (State.recentTranscripts.length>3) State.recentTranscripts.shift();
-        }
+        State.uploadInFlight = Math.max(0, State.uploadInFlight - 1);
       }
     },
 
@@ -557,7 +497,10 @@
       };
 
       try {
-        // Keep microphone capture active while the TTS request is pending.
+        if (State.mediaRecorder?.state === 'recording') {
+          VAD.stop();
+          State.mediaRecorder.pause();
+        }
 
         const headers = { 'Content-Type': 'application/json', 'X-Translate-RT': '1' };
 
@@ -590,10 +533,6 @@
           onError?.(new Error('Audio playback failed'));
         });
 
-        // Avoid the TTS -> microphone -> STT feedback loop. The microphone
-        // remains active during TTS synthesis, but not while audio is played.
-        // Browser echoCancellation cannot reliably cancel external speakers.
-        Recorder.pauseForTTS();
         await audio.play();
       } catch (err) {
         console.error('Erreur TTS:', err);
@@ -604,7 +543,6 @@
           } catch {}
           State.currentAudio = null;
         }
-        Recorder.restart();
         onError?.(err);
       }
     }
@@ -617,8 +555,6 @@
     enqueue(phrase, domElement) {
       if (!DOM.enableTTS?.checked || !phrase) return;
       State.ttsQueue.push({ phrase, element: domElement });
-      State.recentTtsPhrases.push({ text: phrase, time: now() });
-      if (State.recentTtsPhrases.length > 8) State.recentTtsPhrases.shift();
       TTS._process();
     },
 
@@ -673,58 +609,6 @@
   // Transcription rendering
   // =========================
   const Transcription = {
-    // Normalize only for comparison: keep the real transcription unchanged.
-    words(text) {
-      return (text.match(/[\p{L}\p{N}]+/gu) || []).map(w => w.toLocaleLowerCase());
-    },
-    // Return the number of leading words that were already heard. Unlike a
-    // suffix-only comparison, this recognizes replay from *inside* a prior chunk.
-    repeatedPrefix(previous, current) {
-      const left = Transcription.words(previous);
-      const right = Transcription.words(current);
-      if (!left.length || !right.length) return 0;
-      let best = 0;
-      for (let start = 0; start < left.length; start++) {
-        let n = 0;
-        while (n < right.length && start+n < left.length &&
-               right[n] === left[start+n]) n++;
-        // A two-word overlap is enough only at the *exact* chunk
-        // boundary; matches inside older text require >=6 words.
-        const atBoundary = start + n === left.length;
-        if ((atBoundary && n >= 2) || n >= 6) best = Math.max(best,n);
-      }
-      return best;
-    },
-    removeOverlap(previous,current) {
-      if (!previous || !current) return current;
-      const words = Array.from(current.matchAll(/[\p{L}\p{N}]+/gu));
-      const count = Transcription.repeatedPrefix(previous,current);
-      if (!count) return current;
-      if (count >= words.length) return '';
-      // Preserve the original accents, punctuation and capitalization.
-      return current.slice(words[count].index).trim();
-    },
-    deduplicate(current, history) {
-      let value = current;
-      // Match against complete prior chunks; repeat may start in the middle.
-      for (const previous of history.slice(-3)) {
-        value = Transcription.removeOverlap(previous,value);
-        if (!value) return '';
-      }
-      return value;
-    },
-    isPlaybackEcho(transcription) {
-      const t = now();
-      State.recentTtsPhrases = State.recentTtsPhrases.filter(p => t-p.time < 12000);
-      const current = Transcription.words(transcription);
-      if (current.length < 6) return false;
-      return State.recentTtsPhrases.some(p => {
-        const spoken = Transcription.words(p.text);
-        if (spoken.length < 6) return false;
-        const overlap = Transcription.repeatedPrefix(p.text,transcription);
-        return overlap >= Math.max(6,Math.ceil(current.length*0.8));
-      });
-    },
     resetFlushTimer() {
       if (State.flushTimeout) clearTimeout(State.flushTimeout);
 
@@ -735,27 +619,16 @@
       }, Limits.TTS_FLUSH_MS);
     },
 
-    _resolveVoiceNumber(identifier, transcription, continuation = false) {
+    _resolveVoiceNumber(identifier, transcription) {
       const wordCount = countWords(transcription);
-      // Diarization IDs are produced independently for each chunk. When
-      // there is a confirmed textual boundary overlap, keep the prior speaker.
-      if (continuation && State.lastVoiceNumber !== null) {
-        State.pendingSpeakerId = null;
-        State.pendingSpeakerCount = 0;
-        return State.lastVoiceNumber;
-      }
 
       // Déjà connu → garder le mapping confirmé
       if (identifier && State.voiceIndex.has(identifier)) {
-        State.pendingSpeakerId = null;
-        State.pendingSpeakerCount = 0;
         return State.voiceIndex.get(identifier);
       }
 
       // Si identifiant absent, on reste sur le locuteur courant si possible
       if (!identifier) {
-        State.pendingSpeakerId = null;
-        State.pendingSpeakerCount = 0;
         if (State.lastVoiceNumber !== null) return State.lastVoiceNumber;
         return State.voiceCounter++;
       }
@@ -770,50 +643,16 @@
       }
 
       // Vraie nouvelle phrase → on confirme un nouveau mapping
-      // Per-chunk diarization identifiers are not stable identity evidence.
-      // Require a second consecutive chunk with the same new identifier
-      // before changing speaker; single-chunk noise keeps the current voice.
-      if (State.lastVoiceNumber !== null) {
-        if (State.pendingSpeakerId !== identifier) {
-          State.pendingSpeakerId = identifier;
-          State.pendingSpeakerCount = 1;
-          return State.lastVoiceNumber;
-        }
-        State.pendingSpeakerCount++;
-        if (State.pendingSpeakerCount < 2) return State.lastVoiceNumber;
-      }
-      State.pendingSpeakerId = null;
-      State.pendingSpeakerCount = 0;
       const voiceNumber = State.voiceCounter++;
       State.voiceIndex.set(identifier, voiceNumber);
       return voiceNumber;
     },
 
     onResult(result) {
-      // Preserve the diarization service's explicit noise decision. Whisper
-      // may hallucinate fluent words on noise; STT text is not proof of speech.
       if (result?.diarization?.noise) return;
 
-      const original = safeText(result?.transcription || '').trim();
-      if (!original || Transcription.isPlaybackEcho(original)) return;
-      // Suppress ASR loops on silence (e.g. 'you', 'you', 'you'), but
-      // preserve the first short utterance and any different utterance.
-      const tokens = Transcription.words(original);
-      const short = tokens.length <= 2;
-      const key = tokens.join(' ');
-      const clock = now();
-      if (short && key && key === State.lastShortResult &&
-          clock - State.lastShortResultAt < 10000) return;
-      State.lastShortResult = short ? key : '';
-      State.lastShortResultAt = clock;
-      const preceding = State.recentRenderedSources.at(-1) || '';
-      const continuation = Transcription.repeatedPrefix(preceding, original) >= 2;
-      const transcription = Transcription.deduplicate(original,State.recentRenderedSources);
-      // Do not play, translate for display, or assign a new speaker to echoes.
+      const transcription = safeText(result?.transcription || '').trim();
       if (!transcription) return;
-      State.recentRenderedSources.push(original);
-      if (State.recentRenderedSources.length > 4) State.recentRenderedSources.shift();
-      State.lastOriginal=original;
 
       const rawIdentifier = result?.diarization?.identifier;
       const identifier = rawIdentifier ? String(rawIdentifier).slice(-4) : '';
@@ -826,20 +665,10 @@
       const outputLang = result.detected_lang === primaryLang ? targetLang : primaryLang;
       const tradKeys = result.detected_lang === outputLang
         ? [] : [`translation_${outputLang}`];
-      const rawTranslation = tradKeys.map(k => result?.[k]).find(Boolean) || '';
-      // The provider translated the complete chunk, possibly including the
-      // replayed prefix. Avoid showing that stale translation for a trimmed chunk.
-      // The original remains visible rather than displaying duplicated content.
-      const translated = transcription === original && rawTranslation
-        ? Transcription.deduplicate(rawTranslation,State.recentTranslatedSources || [])
-        : transcription;
+      const translated = tradKeys.map(k => result?.[k]).find(Boolean) || transcription;
 
-      if (rawTranslation && translated && translated !== transcription) {
-        State.recentTranslatedSources.push(rawTranslation);
-        if (State.recentTranslatedSources.length > 4) State.recentTranslatedSources.shift();
-      }
       const phraseForTTS = (translated && translated !== transcription) ? translated : null;
-      const voiceNumber = Transcription._resolveVoiceNumber(identifier, transcription, continuation);
+      const voiceNumber = Transcription._resolveVoiceNumber(identifier, transcription);
 
       if (voiceNumber == null) return;
       State.lastVoiceNumber = voiceNumber;

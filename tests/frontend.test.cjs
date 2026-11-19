@@ -10,18 +10,11 @@ function render(result, target = 'es', primary = 'fr') {
   let rendered;
   const transcription = {
     _resolveVoiceNumber: () => 1,
-    removeOverlap: (_previous, current) => current,
-    deduplicate: (current, _history) => current,
-    isPlaybackEcho: () => false,
-    repeatedPrefix: () => 0,
-    words: t => (t.match(/[\p{L}\p{N}]+/gu) || []).map(w => w.toLowerCase()),
     _pushToDom: value => { rendered = value; },
     resetFlushTimer() {},
   };
-  new Function('result', 'DOM', 'safeText', 'State', 'Transcription', 'now', body)(
-    result, { langSelect: { value: target }, primaryLangSelect: { value: primary } }, String,
-    { recentRenderedSources: [], recentTranslatedSources: [], recentTtsPhrases: [],
-      voiceIndex: new Map(), lastVoiceNumber: null, lastShortResult: '', lastShortResultAt: 0 }, transcription, () => 1000);
+  new Function('result', 'DOM', 'safeText', 'State', 'Transcription', body)(
+    result, { langSelect: { value: target }, primaryLangSelect: { value: primary } }, String, {}, transcription);
   return rendered;
 }
 
@@ -71,93 +64,20 @@ test('missing primary translation for third language preserves original', () => 
   assert.equal(result.ttsText, null);
 });
 
-test('sentence boundaries use a longer maximum window and silence hold', () => {
-  assert.match(source, /maxChunkDuration:\s*9000/);
-  assert.match(source, /minChunkDuration:\s*2500/);
-  assert.match(source, /punctuationSilenceMs:\s*800/);
-  assert.match(source, /punctuationCheckMs:\s*3000/);
-  assert.match(source, /silenceHoldMs:\s*250/);
+test('VAD waits for natural pauses instead of cutting on short breaths', () => {
+  assert.match(source, /maxChunkDuration:\s*12000/);
+  assert.match(source, /punctuationSilenceMs:\s*750/);
+  assert.match(source, /minSilenceMs:\s*1100/);
+  assert.match(source, /silenceHoldMs:\s*300/);
 });
-test('PCM capture never stops or restarts MediaRecorder between windows', () => {
-  assert.match(source, /createScriptProcessor/);
-  assert.match(source, /encodeWav/);
-  assert.doesNotMatch(source, /State\.mediaRecorder\.stop\(/);
+test('VAD uses RMS and initializes EMA on the first measured frame', () => {
+  assert.match(source, /levelEMA:\s*null/);
+  assert.match(source, /State\.levelEMA === null\s*\? rms/);
+  assert.match(source, /Math\.max\(State\.maxRmsSinceResume, rms\)/);
+  assert.doesNotMatch(source, /peak \|\| rms/);
 });
-test('overlap removes repeated words but preserves unrelated text', () => {
-  const extract = (start) => source.split(start)[1].split('\n    },')[0];
-  const wordBody=extract('    words(text) {');
-  const prefixBody=extract('    repeatedPrefix(previous, current) {');
-  const trimBody=extract('    removeOverlap(previous,current) {');
-  const helper={};
-  helper.words=t=>new Function('text',wordBody)(t);
-  helper.repeatedPrefix=(a,b)=>new Function('previous','current','Transcription',prefixBody)(a,b,helper);
-  const trim=(a,b)=>new Function('previous','current','Transcription',trimBody)(a,b,helper);
-  assert.equal(trim('the president of the United States','of the United States spoke'), 'spoke');
-  assert.equal(trim('Hello world','another sentence'), 'another sentence');
-});
-
-test('audible audio is submitted even if VAD frame tracking misses it', () => {
-  assert.match(source, /const audible = durationMs >= 800/);
-  assert.match(source, /speechMs >= 300/);
-  assert.match(source, /vadAccepted \|\| audible/);
-});
-test('TTS playback pauses capture only after synthesis, before playback', () => {
-  const playback = source.split('    async ttsSpeak(')[1].split('  // =========================\n  // TTS Queue')[0];
-  assert.match(playback, /Recorder\.pauseForTTS\(\);\s*await audio\.play\(\)/);
-  assert.ok(playback.indexOf('await response.blob()') < playback.indexOf('Recorder.pauseForTTS()'));
-});
-
-test('Unicode word tokenization is actually enabled for replay matching', () => {
-  assert.match(source, /text\.match\(\/\[\\p\{L\}\\p\{N\}\]\+\/gu\)/);
-});
-
-test('two-word overlap at a true chunk boundary is removed', () => {
-  const helper=source.split('    repeatedPrefix(previous, current) {')[1].split('\n    },')[0];
-  const words=source.split('    words(text) {')[1].split('\n    },')[0];
-  const remove=source.split('    removeOverlap(previous,current) {')[1].split('\n    },')[0];
-  const t={};
-  t.words=new Function('text',words);
-  const rp=(a,b)=>new Function('previous','current','Transcription',helper)(a,b,t);
-  t.repeatedPrefix=rp;
-  assert.equal(rp('I will feed','feed them'),0);
-  assert.equal(rp("I'll feed", "I'll feed their interviews"),3);
-  assert.equal(rp('It is just a test', 'a test for you'),2);
-  assert.equal(rp('It is just a test', 'it is'),0);
-  const trim=(a,b)=>new Function('previous','current','Transcription',remove)(a,b,t);
-  assert.equal(trim("I'll feed","I'll feed their interviews"),'their interviews');
-});
-
-test('new diarization IDs require confirmation before changing speaker', () => {
-  const body=source.split('    _resolveVoiceNumber(identifier, transcription, continuation = false) {')[1]
-    .split('\n    onResult(result) {')[0].replace(/\n    },\s*$/, '');
-  const state={ lastVoiceNumber: 1, voiceCounter: 2, voiceIndex: new Map(),
-    pendingSpeakerId: null, pendingSpeakerCount: 0 };
-  const resolve=new Function('identifier','transcription','continuation','State','countWords','Limits',body);
-  const call=(id,cont=false)=>resolve(id,'a sufficiently long example of speech',cont,state,t=>t.split(' ').length,{keepCurrentSpeakerMaxWords:4});
-  assert.equal(call('new-id'),1);
-  assert.equal(call('new-id'),2);
-  assert.equal(call('new-id'),2);
-});
-
-test('short repeated ASR hallucinations are throttled, not the first utterance', () => {
-  assert.match(source, /tokens\.length <= 2/);
-  assert.match(source, /clock - State\.lastShortResultAt < 10000/);
-});
-
-test('diarization noise takes precedence over hallucinated STT text', () => {
-  const handler=source.split('    onResult(result) {')[1].split('\n    _pushToDom(')[0];
-  assert.match(handler, /result\?\.diarization\?\.noise\) return/);
-  const drain=source.split('    drainResults() {')[1].split('\n    async ttsSpeak(')[0];
-  assert.match(drain, /else if \(result\?\.diarization\?\.noise\)/);
-});
-
-test('16kHz PCM reduction reduces network payload by three times', () => {
-  const body=source.split('    downsample(pcm, sourceRate, targetRate=16000) {')[1]
-    .split('\n    },')[0];
-  const downsample=new Function('pcm','sourceRate','targetRate',body);
-  const input=new Float32Array(48000).fill(0.5);
-  const out=downsample(input,48000,16000);
-  assert.equal(out.rate,16000);
-  assert.equal(out.pcm.length,16000);
-  assert.ok(Math.abs(out.pcm[500]-0.5)<0.001);
+test('Opus MediaRecorder and noise-filtered diarization are unchanged', () => {
+  assert.match(source, /new MediaRecorder\(State\.stream/);
+  assert.match(source, /State\.mediaRecorder\.stop\(\)/);
+  assert.match(source, /result\?\.diarization\?\.noise/);
 });

@@ -303,7 +303,7 @@ def _looks_like_noise(text: str, whisper_payload: Dict[str, Any]) -> bool:
     return False
 
 
-def translate_text_cached(text: str, lang: str, context: str = '') -> str:
+def translate_text_cached(text: str, lang: str) -> str:
     """Legacy helper name; deliberately no shared cache of conversation content."""
     lang = _sanitize_lang(lang)
     lang_prompt = LANG_NAME.get(lang, lang)
@@ -313,14 +313,11 @@ def translate_text_cached(text: str, lang: str, context: str = '') -> str:
         'messages': [
             {
                 'role': 'system',
-                'content': ('You are a professional translator. Translate accurately and naturally. '
-                            'The preceding transcript is context only; never translate it again. '
-                            'Translate only the current text.'),
+                'content': 'You are a professional translator. Translate accurately and naturally.',
             },
             {
                 'role': 'user',
-                'content': (f'Preceding transcript (context only):\n{context}\n\n' if context else '')
-                            + f'Translate the CURRENT text into {lang_prompt}. Return ONLY the translation.\n\n{text}',
+                'content': f'Translate the text into {lang_prompt}. Return ONLY the translation.\n\n{text}',
             },
         ],
         'temperature': 0,
@@ -347,7 +344,7 @@ def translate_text_cached(text: str, lang: str, context: str = '') -> str:
     return _normalize_text(content)
 
 
-def build_translations(text: str, detected_lang: str, primary_lang: str, target_lang: str, context: str = '') -> Dict[str, str]:
+def build_translations(text: str, detected_lang: str, primary_lang: str, target_lang: str) -> Dict[str, str]:
     result: Dict[str, str] = {}
     detected_lang = _sanitize_lang(detected_lang, '')
     primary_lang = _sanitize_lang(primary_lang)
@@ -364,7 +361,7 @@ def build_translations(text: str, detected_lang: str, primary_lang: str, target_
     if not targets:
         return result
 
-    futures = {lang: io_pool.submit(translate_text_cached, text, lang, context) for lang in targets}
+    futures = {lang: io_pool.submit(translate_text_cached, text, lang) for lang in targets}
 
     first_error: Optional[HTTPException] = None
     for lang, future in futures.items():
@@ -430,7 +427,6 @@ def process_audio_chunk(
     data: bytes,
     primary_lang: str,
     target_lang: str,
-    context: str = '',
 ) -> Dict[str, Any]:
     """Run the audio pipeline while overlapping independent provider calls.
 
@@ -459,17 +455,12 @@ def process_audio_chunk(
     translations: Dict[str, str] = {}
     try:
         if transcription and transcription.lower() not in FILTER_NORMALIZED:
-            # Prefer the speech model's audio-language decision when available.
-            # Text-only detection is unstable on tiny fragments ("explains abstract
-            # concepts"), especially after code-switching.
-            whisper_lang = _sanitize_lang(whisper_payload.get('language', ''), '')
-            detected_lang = whisper_lang or detect_language(transcription)
+            detected_lang = detect_language(transcription)
             translations = build_translations(
                 transcription,
                 detected_lang,
                 primary_lang,
                 target_lang,
-                context,
             )
     finally:
         # Always settle the future before returning or propagating an error.
@@ -592,7 +583,6 @@ def upload(
     file: UploadFile = File(...),
     target_lang: str = Form('fr', max_length=35, pattern=r'^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$'),
     primary_lang: str = Form('fr', max_length=35, pattern=r'^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$'),
-    context: str = Form('', max_length=500),
 ) -> Dict[str, Any]:
     if not file:
         raise HTTPException(status_code=400, detail='No file provided')
@@ -631,7 +621,6 @@ def upload(
             contents,
             primary_lang,
             target_lang,
-            context,
         )
     except HTTPException:
         raise
