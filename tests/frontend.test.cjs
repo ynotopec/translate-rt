@@ -64,11 +64,13 @@ test('missing primary translation for third language preserves original', () => 
   assert.equal(result.ttsText, null);
 });
 
-test('VAD waits for natural pauses instead of cutting on short breaths', () => {
-  assert.match(source, /maxChunkDuration:\s*12000/);
-  assert.match(source, /punctuationSilenceMs:\s*750/);
+test('VAD favors short pauses after two seconds of speech', () => {
+  assert.match(source, /minChunkDuration:\s*2000/);
+  assert.match(source, /punctuationCheckMs:\s*2000/);
+  assert.match(source, /maxChunkDuration:\s*10000/);
+  assert.match(source, /punctuationSilenceMs:\s*380/);
   assert.match(source, /minSilenceMs:\s*1100/);
-  assert.match(source, /silenceHoldMs:\s*300/);
+  assert.match(source, /silenceHoldMs:\s*200/);
 });
 test('VAD uses RMS and initializes EMA on the first measured frame', () => {
   assert.match(source, /levelEMA:\s*null/);
