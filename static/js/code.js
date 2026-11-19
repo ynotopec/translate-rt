@@ -104,14 +104,14 @@
   const Limits = {
     MAX_MESSAGES: 65536,
     MAX_BUFFER_LENGTH: 4,
-    minChunkDuration: 1500,
-    maxChunkDuration: 6500,
-    minSilenceMs: 1000,
+    minChunkDuration: 2000,
+    maxChunkDuration: 10000,
+    minSilenceMs: 1100,
     minVoiceMs: 400,
     minSpeechRms: 0.012,
     minSpeechFrames: 6,
-    punctuationCheckMs: 3000,
-    punctuationSilenceMs: 300,
+    punctuationCheckMs: 2000,
+    punctuationSilenceMs: 380,
     TTS_FLUSH_MS: 10000,
     keepCurrentSpeakerMaxWords: 4,
   };
@@ -121,7 +121,7 @@
     alphaNoise: 0.995,
     speechStartMargin: 3.0,
     speechStopMargin: 2.2,
-    silenceHoldMs: 120,
+    silenceHoldMs: 200,
     initNoiseFloor: 0.002,
     intervalMs: 50,
   };
@@ -145,7 +145,7 @@
     totalSpeechFrames: 0,
 
     // VAD
-    levelEMA: 0,
+    levelEMA: null,
     noiseFloor: VADParams.initNoiseFloor,
     speechStartTime: 0,
     silenceStart: 0,
@@ -193,8 +193,7 @@
           noiseSuppression: true,
           echoCancellation: true,
           autoGainControl: true,
-          channelCount: 1,
-          sampleRate: 48000
+          channelCount: 1
         }
       });
 
@@ -337,6 +336,7 @@
       State.hadSpeechSinceResume = false;
       State.maxRmsSinceResume = 0;
       State.totalSpeechFrames = 0;
+      State.levelEMA = null;
       State.isSpeech = false;
       State.speechStartTime = 0;
       State.silenceStart = 0;
@@ -382,7 +382,9 @@
 
       const rms = Math.sqrt(sumSquares / State.dataArray.length);
 
-      State.levelEMA = VADParams.alphaLevel * State.levelEMA + (1 - VADParams.alphaLevel) * rms;
+      State.levelEMA = State.levelEMA === null
+        ? rms
+        : VADParams.alphaLevel * State.levelEMA + (1 - VADParams.alphaLevel) * rms;
 
       const speechStartThreshold = State.noiseFloor * VADParams.speechStartMargin;
       const speechStopThreshold = State.noiseFloor * VADParams.speechStopMargin;
@@ -395,7 +397,7 @@
         }
 
         State.silenceStart = 0;
-        State.maxRmsSinceResume = Math.max(State.maxRmsSinceResume, peak || rms);
+        State.maxRmsSinceResume = Math.max(State.maxRmsSinceResume, rms);
         State.totalSpeechFrames++;
 
         if (!State.hadSpeechSinceResume && (t - State.speechStartTime > Limits.minVoiceMs)) {

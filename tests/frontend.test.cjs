@@ -63,3 +63,23 @@ test('missing primary translation for third language preserves original', () => 
   assert.equal(result.translated, 'Hello');
   assert.equal(result.ttsText, null);
 });
+
+test('VAD favors short pauses after two seconds of speech', () => {
+  assert.match(source, /minChunkDuration:\s*2000/);
+  assert.match(source, /punctuationCheckMs:\s*2000/);
+  assert.match(source, /maxChunkDuration:\s*10000/);
+  assert.match(source, /punctuationSilenceMs:\s*380/);
+  assert.match(source, /minSilenceMs:\s*1100/);
+  assert.match(source, /silenceHoldMs:\s*200/);
+});
+test('VAD uses RMS and initializes EMA on the first measured frame', () => {
+  assert.match(source, /levelEMA:\s*null/);
+  assert.match(source, /State\.levelEMA === null\s*\? rms/);
+  assert.match(source, /Math\.max\(State\.maxRmsSinceResume, rms\)/);
+  assert.doesNotMatch(source, /peak \|\| rms/);
+});
+test('Opus MediaRecorder and noise-filtered diarization are unchanged', () => {
+  assert.match(source, /new MediaRecorder\(State\.stream/);
+  assert.match(source, /State\.mediaRecorder\.stop\(\)/);
+  assert.match(source, /result\?\.diarization\?\.noise/);
+});
