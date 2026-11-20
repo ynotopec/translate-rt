@@ -103,16 +103,25 @@
 
   const Limits = {
     MAX_MESSAGES: 65536,
-    MAX_BUFFER_LENGTH: 4,
+
+    // Audio chunking. A "sentence" pause in French is ~600-900 ms, a comma
+    // break ~200-400 ms: cutting at 300 ms split every sentence on its commas.
     minChunkDuration: 1500,
-    maxChunkDuration: 6500,
-    minSilenceMs: 1000,
+    softMaxChunkDuration: 6500,   // take the first short dip past this
+    maxChunkDuration: 9000,       // hard ceiling, last resort
+    softCutSilenceMs: 250,        // dip long enough to be a word boundary
+    minSilenceMs: 900,
     minVoiceMs: 400,
     minSpeechRms: 0.012,
     minSpeechFrames: 6,
-    punctuationCheckMs: 3000,
-    punctuationSilenceMs: 300,
-    TTS_FLUSH_MS: 10000,
+    punctuationCheckMs: 4000,
+    punctuationSilenceMs: 650,
+
+    // Text assembly: fragments are merged until the sentence is complete.
+    sentenceGraceMs: 2500,        // no new chunk for this long -> sentence ends
+    maxSentenceChars: 320,
+    maxSentenceWords: 70,
+
     keepCurrentSpeakerMaxWords: 4,
   };
 
@@ -137,6 +146,7 @@
     stream: null,
     audioChunks: [],
     recordingStart: 0,
+    recordingActive: false,
     shouldRestartRecording: false,
     isRestarting: false,
     hadSpeechSinceResume: false,
@@ -155,7 +165,7 @@
     // Diarisation / affichage
     voiceIndex: new Map(),          // identifier -> confirmed voiceNumber
     voiceCounter: 1,
-    textBuffer: '',
+    currentLine: null,              // sentence being assembled (see Transcription)
     lastVoiceNumber: null,
     flushTimeout: null,
     fullTranscriptionLog: [],
@@ -217,7 +227,7 @@
       }
 
       resetVoiceIndexing();
-      State.textBuffer = '';
+      State.currentLine = null;
       State.ttsQueue = [];
       State.ttsInProgress = false;
       State.currentAudio = null;
@@ -256,6 +266,7 @@
       };
 
       State.mediaRecorder.start();
+      State.recordingActive = true;
       State.recordingStart = now();
       VAD.start();
       UI.onRecordingState(true);
@@ -282,6 +293,9 @@
         State.stream.getTracks().forEach(t => t.stop());
       }
 
+      // Close the pending sentence so it is logged, then mute: the user stopped.
+      State.recordingActive = false;
+      Transcription.flush();
       TTS.cancelAll();
       UI.onRecordingState(false);
     },
@@ -417,31 +431,44 @@
       }
 
       const chunkLongEnough = t - State.recordingStart > Limits.minChunkDuration;
+      const chunkAge = t - State.recordingStart;
+      const dipDuration = State.silenceStart ? t - State.silenceStart : 0;
 
+      // Early sentence cut: a 650 ms pause only counts as a boundary once the
+      // chunk holds a full clause, otherwise short backchannels would cut.
       if (!State.isSpeech && State.hadSpeechSinceResume && State.silenceStart && chunkLongEnough) {
-        const silenceDuration = t - State.silenceStart;
-
         if (
-          silenceDuration >= Limits.punctuationSilenceMs &&
-          t - State.recordingStart >= Limits.punctuationCheckMs
+          dipDuration >= Limits.punctuationSilenceMs &&
+          chunkAge >= Limits.punctuationCheckMs
         ) {
           VAD._stopAndRestartChunk();
           return;
         }
       }
 
+      // Soft cap: past softMaxChunkDuration, cut on the first short dip (a word
+      // boundary) instead of waiting for the hard cap and truncating a word.
+      if (
+        chunkAge >= Limits.softMaxChunkDuration &&
+        State.hadSpeechSinceResume &&
+        dipDuration >= Limits.softCutSilenceMs
+      ) {
+        VAD._stopAndRestartChunk();
+        return;
+      }
+
       if (
         !State.isSpeech &&
         State.hadSpeechSinceResume &&
         State.silenceStart &&
-        t - State.silenceStart > Limits.minSilenceMs &&
+        dipDuration > Limits.minSilenceMs &&
         chunkLongEnough
       ) {
         VAD._stopAndRestartChunk();
         return;
       }
 
-      if (t - State.recordingStart >= Limits.maxChunkDuration) {
+      if (chunkAge >= Limits.maxChunkDuration) {
         VAD._stopAndRestartChunk();
       }
     }
@@ -604,17 +631,77 @@
   };
 
   // =========================
+  // Sentence assembly
+  // =========================
+  // One API chunk is not one sentence: the chunker cuts on pauses and on the
+  // duration cap, so consecutive chunks must be glued back until punctuation
+  // (or a real pause) proves the sentence is over.
+  const Sentence = {
+    TERMINAL: /[.!?…。！？؟][\s"'»”’)\]]*$/,
+
+    isComplete(text) {
+      return Sentence.TERMINAL.test((text || '').trim());
+    },
+
+    _normalize(word) {
+      return word.toLowerCase().replace(/[^\p{L}\p{N}]/gu, '');
+    },
+
+    // Whisper re-transcribes the tail of the previous chunk when the audio is
+    // cut mid-sentence; drop the duplicated words at the seam.
+    stripOverlap(previous, next) {
+      const prevWords = previous.trim().split(/\s+/);
+      const nextWords = next.trim().split(/\s+/);
+      const max = Math.min(6, prevWords.length, nextWords.length);
+
+      for (let k = max; k >= 2; k--) {
+        const tail = prevWords.slice(-k).map(Sentence._normalize).join(' ');
+        const head = nextWords.slice(0, k).map(Sentence._normalize).join(' ');
+        if (tail && tail === head) return nextWords.slice(k).join(' ');
+      }
+      return next;
+    },
+
+    // "…le budget Et ensuite" would read as a typo: a continuation keeps its
+    // text but loses the sentence-initial capital, unless it is an acronym.
+    lowerFirst(text) {
+      const match = text.match(/^([^\p{L}]*)(\p{L})(\p{L}*)([\s\S]*)$/u);
+      if (!match) return text;
+      const [, lead, first, rest, tail] = match;
+      const isAcronym = rest.length > 0 && rest === rest.toUpperCase();
+      return isAcronym ? text : lead + first.toLowerCase() + rest + tail;
+    },
+
+    join(previous, next) {
+      const merged = Sentence.stripOverlap(previous, next);
+      if (!merged) return previous;
+      return `${previous.trimEnd()} ${Sentence.lowerFirst(merged.trimStart())}`;
+    },
+
+    hasRoom(line) {
+      return line.wordCount <= Limits.maxSentenceWords &&
+             line.charCount <= Limits.maxSentenceChars;
+    }
+  };
+
+  // =========================
   // Transcription rendering
   // =========================
   const Transcription = {
+    // A pause longer than sentenceGraceMs closes the sentence even when the
+    // model returned no terminal punctuation.
     resetFlushTimer() {
       if (State.flushTimeout) clearTimeout(State.flushTimeout);
 
       State.flushTimeout = setTimeout(() => {
-        if (State.textBuffer && State.textBuffer.trim().length > 0) {
-          State.textBuffer = '';
-        }
-      }, Limits.TTS_FLUSH_MS);
+        Transcription._closeLine();
+      }, Limits.sentenceGraceMs);
+    },
+
+    flush() {
+      if (State.flushTimeout) clearTimeout(State.flushTimeout);
+      State.flushTimeout = null;
+      Transcription._closeLine();
     },
 
     _resolveVoiceNumber(identifier, transcription) {
@@ -684,6 +771,27 @@
     _pushToDom({ translated, original, voiceNumber, ttsText }) {
       if (!DOM.transcriptionResult) return;
 
+      const line = State.currentLine;
+      const mergeable =
+        line &&
+        !line.closed &&
+        line.voiceNumber === voiceNumber &&
+        Sentence.hasRoom(line) &&
+        !Sentence.isComplete(line.text) &&
+        (translated || original);
+
+      if (mergeable) {
+        Transcription._appendToLine(line, translated, original, ttsText);
+        return;
+      }
+
+      if (line) Transcription._closeLine(line);
+      Transcription._openLine({ translated, original, voiceNumber, ttsText });
+    },
+
+    _openLine({ translated, original, voiceNumber, ttsText }) {
+      if (!DOM.transcriptionResult) return;
+
       while (DOM.transcriptionResult.childNodes.length >= Limits.MAX_MESSAGES) {
         DOM.transcriptionResult.removeChild(DOM.transcriptionResult.firstChild);
       }
@@ -692,43 +800,93 @@
       const lang = DOM.primaryLangSelect?.value || 'en';
       const label = SpeakerLabels[lang] || 'Speaker';
 
-      const msgDiv = document.createElement('div');
-      msgDiv.style.marginBottom = '5px';
-      msgDiv.classList.add('tts-line');
+      const el = document.createElement('div');
+      el.style.marginBottom = '5px';
+      el.classList.add('tts-line');
 
       const strong = document.createElement('strong');
       strong.style.color = color;
       strong.textContent = `${label} ${voiceNumber}:`;
-      msgDiv.appendChild(strong);
-      appendText(msgDiv, ' ');
+      el.appendChild(strong);
+      appendText(el, ' ');
 
+      const shown = ttsText ? translated : original;
+      const textNode = document.createTextNode(shown);
+      el.appendChild(textNode);
+
+      let originalSpan = null;
       if (ttsText) {
-        appendText(msgDiv, translated);
-
-        const span = document.createElement('span');
-        span.style.opacity = '0.65';
-        span.textContent = ` (${original})`;
-        msgDiv.appendChild(span);
-      } else {
-        appendText(msgDiv, original);
+        originalSpan = document.createElement('span');
+        originalSpan.style.opacity = '0.65';
+        originalSpan.textContent = ` (${original})`;
+        el.appendChild(originalSpan);
       }
 
       setTimeout(() => {
-        DOM.transcriptionResult.appendChild(msgDiv);
+        DOM.transcriptionResult.appendChild(el);
         DOM.transcriptionResult.scrollTop = DOM.transcriptionResult.scrollHeight;
       }, 0);
 
-      State.fullTranscriptionLog.push({
-        speaker: `${label} ${voiceNumber}`,
-        translated: translated || '',
+      State.currentLine = {
+        el,
+        textNode,
+        originalSpan,
+        voiceNumber,
+        label,
+        text: shown,
         original: original || '',
-        phrase: ttsText ? `${translated} (${original})` : original,
+        ttsText: ttsText || null,
+        wordCount: countWords(shown),
+        charCount: shown.length,
+        closed: false,
+      };
+    },
+
+    _appendToLine(line, translated, original, ttsText) {
+      line.text = Sentence.join(line.text, ttsText ? translated : original);
+
+      if (line.originalSpan) {
+        line.original = Sentence.join(line.original, original);
+        line.originalSpan.textContent = ` (${line.original})`;
+      } else if (ttsText) {
+        line.original = original;
+        line.originalSpan = document.createElement('span');
+        line.originalSpan.style.opacity = '0.65';
+        line.originalSpan.textContent = ` (${original})`;
+        line.el.appendChild(line.originalSpan);
+      } else {
+        line.original = Sentence.join(line.original, original);
+      }
+
+      if (ttsText) {
+        line.ttsText = line.ttsText ? Sentence.join(line.ttsText, ttsText) : ttsText;
+      }
+
+      line.textNode.textContent = line.text;
+      line.wordCount = countWords(line.text);
+      line.charCount = line.text.length;
+      line.el.scrollIntoView?.({ block: 'nearest' });
+      DOM.transcriptionResult.scrollTop = DOM.transcriptionResult.scrollHeight;
+    },
+
+    // A sentence is spoken and logged once, whole, when it is finally complete.
+    _closeLine(line = State.currentLine) {
+      if (!line || line.closed) return;
+      line.closed = true;
+
+      State.fullTranscriptionLog.push({
+        speaker: `${line.label} ${line.voiceNumber}`,
+        translated: line.ttsText ? line.text : '',
+        original: line.original || line.text,
+        phrase: line.text,
         timestamp: new Date().toISOString()
       });
 
-      if (DOM.enableTTS?.checked && ttsText) {
-        TTS.enqueue(ttsText, msgDiv);
+      if (State.recordingActive && DOM.enableTTS?.checked && line.ttsText) {
+        TTS.enqueue(line.ttsText, line.el);
       }
+
+      if (State.currentLine === line) State.currentLine = null;
     }
   };
 
