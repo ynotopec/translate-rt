@@ -62,6 +62,7 @@ Populate the environment variables described below before launching `app.py`. Th
 | `AUDIO_API_KEY` | ✅ | Bearer token passed to the Whisper transcription endpoint (`Cfg.WHISPER_URL`). |
 | `OPENAI_API_KEY` | ✅ | Token used when requesting translations through `Cfg.OPENAI_API_BASE`. |
 | `OPENAI_API_BASE` | ⚙️ | Base URL of the translation provider (mandatory; no default). |
+| `TRANSLATE_RT_API_TOKEN` | ✅ | Bearer token required on every route except `/healthz`. The API refuses to start when unset. |
 | `OPENAI_API_MODEL` | ⚙️ | Chat-completions model name used for translations (defaults to `gpt-oss`). |
 | `CONNECT_TIMEOUT` | ⚙️ | Maximum time in seconds to establish an upstream connection (defaults to `5`). |
 | `REQUEST_TIMEOUT` | ⚙️ | Maximum time in seconds to wait for a response from general upstream services (defaults to `30`). |

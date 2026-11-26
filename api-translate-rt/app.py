@@ -2,6 +2,7 @@
 import logging
 import os
 import re
+from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
 from typing import Any, Dict, Optional
@@ -56,6 +57,16 @@ def _normalize_text(value: str) -> str:
 
 def _is_small_audio(data: bytes) -> bool:
     return len(data) < 16_000
+
+
+# Provider selector values (model, voice) are matched against an allow-list
+# pattern so a caller cannot name an arbitrary, possibly costly, upstream
+# option. Narrow by design: extend the pattern when a new option is offered.
+_PROVIDER_OPTION_RE = re.compile(r'^[a-z0-9][a-z0-9._:-]{0,63}$')
+
+
+def _is_safe_provider_option(value: Any) -> bool:
+    return isinstance(value, str) and bool(_PROVIDER_OPTION_RE.fullmatch(value))
 
 
 def _guess_content_type(upload: UploadFile, filename: str) -> str:
@@ -118,13 +129,19 @@ class Cfg:
     OPENAI_REQUEST_TIMEOUT = _env_timeout('OPENAI_REQUEST_TIMEOUT', 60)
 
     CORS_ALLOW_CREDENTIALS = _env_bool('CORS_ALLOW_CREDENTIALS', False)
+    # Same-origin is the default: the bundled frontend calls /api/* on its own
+    # origin, so wildcard CORS is never needed. Widening it is an explicit,
+    # audited decision (`CORS_ALLOW_ORIGINS=https://app.example.com`).
     CORS_ALLOW_ORIGINS = [
         origin.strip()
-        for origin in os.getenv('CORS_ALLOW_ORIGINS', '*').split(',')
+        for origin in os.getenv('CORS_ALLOW_ORIGINS', '').split(',')
         if origin.strip()
     ]
     CORS_ALLOW_ORIGIN_REGEX = os.getenv('CORS_ALLOW_ORIGIN_REGEX', '').strip() or None
     TRANSLATE_RT_API_TOKEN = os.getenv('TRANSLATE_RT_API_TOKEN', '').strip()
+
+    # Translation cache settings
+    CACHE_SIZE = int(os.getenv('CACHE_SIZE', '512'))
 
 
 def _build_origin_regex_from_origin(origin: str) -> Optional[str]:
@@ -137,7 +154,7 @@ def _build_origin_regex_from_origin(origin: str) -> Optional[str]:
         return None
 
     root_domain = re.escape(host[1:])
-    port_pattern = rf':{parsed.port}' if parsed.port is not None else r'(?::\d+)?'
+    port_pattern = rf':{parsed.port}' if parsed.port is not None else r'(?:\:\d+)?'
     return rf'^{parsed.scheme}://(?:[a-zA-Z0-9-]+\.)*{root_domain}{port_pattern}$'
 
 
@@ -169,14 +186,27 @@ if not Cfg.OPENAI_API_KEY:
     missing_env.append('OPENAI_API_KEY')
 if not Cfg.OPENAI_API_BASE:
     missing_env.append('OPENAI_API_BASE')
+# Fail closed: an unset token used to disable auth entirely, turning every
+# provider-backed route into an open relay on the operator's budget.
+if not Cfg.TRANSLATE_RT_API_TOKEN:
+    missing_env.append('TRANSLATE_RT_API_TOKEN')
 
 if missing_env:
     raise RuntimeError(f"Missing mandatory env variable(s): {', '.join(missing_env)}")
 
-if Cfg.CORS_ALLOW_CREDENTIALS and ('*' in ALLOW_ORIGINS or ALLOW_ORIGIN_REGEX == '.*'):
-    raise RuntimeError(
-        'Invalid CORS configuration: CORS_ALLOW_CREDENTIALS=true cannot be used with CORS_ALLOW_ORIGINS=*'
-    )
+# Credentialed CORS may never resolve to "any origin": a regex such as `.*`
+# matches every site once Starlette calls fullmatch(). Test the *runtime* regex
+# against a host that must never be allowed instead of comparing raw strings.
+if Cfg.CORS_ALLOW_CREDENTIALS:
+    try:
+        wildcard_regex = bool(ALLOW_ORIGIN_REGEX) and re.fullmatch(ALLOW_ORIGIN_REGEX, 'https://evil.invalid')
+    except re.error as exc:
+        raise RuntimeError(f'Invalid CORS_ALLOW_ORIGIN_REGEX: {exc}') from exc
+    if '*' in ALLOW_ORIGINS or wildcard_regex:
+        raise RuntimeError(
+            'Invalid CORS configuration: CORS_ALLOW_CREDENTIALS=true cannot be used '
+            'with a wildcard origin or a regex matching arbitrary hosts'
+        )
 
 # ────────────────────────────── HTTP session ──────────────────────────────
 session = requests.Session()
@@ -303,9 +333,36 @@ def _looks_like_noise(text: str, whisper_payload: Dict[str, Any]) -> bool:
     return False
 
 
+# ────────────────────────────── Translation cache ──────────────────────────────
+_translation_cache: OrderedDict[tuple[str, str], str] = OrderedDict()
+
+
+def _cache_get(text: str, lang: str) -> Optional[str]:
+    key = (text, lang)
+    if key in _translation_cache:
+        _translation_cache.move_to_end(key)
+        return _translation_cache[key]
+    return None
+
+
+def _cache_put(text: str, lang: str, value: str) -> None:
+    key = (text, lang)
+    _translation_cache[key] = value
+    _translation_cache.move_to_end(key)
+    while len(_translation_cache) > Cfg.CACHE_SIZE:
+        _translation_cache.popitem(last=False)
+
+
 def translate_text_cached(text: str, lang: str) -> str:
-    """Legacy helper name; deliberately no shared cache of conversation content."""
+    """Translate text with LRU cache to avoid redundant API calls."""
     lang = _sanitize_lang(lang)
+
+    # Check cache first
+    cached = _cache_get(text, lang)
+    if cached is not None:
+        logger.info('[CACHE HIT] lang=%s text_len=%d', lang, len(text))
+        return cached
+
     lang_prompt = LANG_NAME.get(lang, lang)
 
     payload = {
@@ -341,7 +398,9 @@ def translate_text_cached(text: str, lang: str) -> str:
         logger.error('Unexpected translation response format')
         raise HTTPException(status_code=502, detail='Invalid translation response format') from exc
 
-    return _normalize_text(content)
+    result = _normalize_text(content)
+    _cache_put(text, lang, result)
+    return result
 
 
 def build_translations(text: str, detected_lang: str, primary_lang: str, target_lang: str) -> Dict[str, str]:
@@ -531,13 +590,25 @@ def tts_proxy(payload: Dict[str, Any] = Body(...)) -> Response:
     if not isinstance(payload.get('input'), str) or not 0 < len(payload['input']) <= 20000:
         raise HTTPException(status_code=422, detail='Le texte TTS doit contenir entre 1 et 20000 caractères')
 
+    # Only the fields the bundled frontend sends are forwarded. Without this,
+    # a caller could pick an arbitrary provider model or voice on the
+    # operator's account by adding keys to the JSON body.
+    allowed_fields = ('input', 'model', 'voice', 'instructions', 'response_format')
+    forwarded = {key: payload[key] for key in allowed_fields if key in payload}
+    if 'model' in forwarded and not _is_safe_provider_option(forwarded['model']):
+        raise HTTPException(status_code=422, detail='Paramètre model invalide')
+    if 'voice' in forwarded and not _is_safe_provider_option(forwarded['voice']):
+        raise HTTPException(status_code=422, detail='Paramètre voice invalide')
+    if 'response_format' in forwarded and forwarded['response_format'] not in {'mp3', 'opus', 'aac', 'flac', 'wav', 'pcm'}:
+        raise HTTPException(status_code=422, detail='Paramètre response_format invalide')
+
     response = post(
         Cfg.TTS_URL,
         headers={
             'Authorization': f'Bearer {Cfg.TTS_API_KEY}',
             'Content-Type': 'application/json',
         },
-        json=payload,
+        json=forwarded,
     )
 
     if not response.ok:

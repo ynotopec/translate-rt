@@ -123,9 +123,16 @@ Defaults, configurable through environment variables:
 | `PROXY_READ_TIMEOUT` | 120 seconds | Flask upstream read timeout |
 
 API limits reject excess demand with 413/429, including bodies sent without
-Content-Length. Health and documentation routes are exempt. Use the ingress for
-shared quotas, per-user limits, connection limits and slow-upload timeouts across
-workers/replicas. Text and TTS input are capped at 20,000 characters.
+Content-Length. Only the `/healthz` liveness probe is public: `/docs`, `/redoc`
+and `/openapi.json` require the API token so the route table is not published.
+Use the ingress for shared quotas, per-user limits, connection limits and
+slow-upload timeouts across workers/replicas. Text and TTS input are capped at
+20,000 characters.
+
+`TRANSLATE_RT_API_TOKEN` is mandatory and the API refuses to start without it;
+an unset token used to disable authentication entirely. The API also rejects
+`model`, `voice` and `response_format` values that are not on its allow-list, so
+a caller cannot select an arbitrary provider option on your account.
 
 Translation caching has been removed: `MAX_CACHE_SIZE` no longer has an effect.
 Repeated phrases now call the provider again. Application logs omit payloads and

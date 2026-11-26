@@ -15,3 +15,10 @@ FRONTEND_AUTH_MODE=basic optionally restricts access with a password, while
 FRONTEND_AUTH_MODE=proxy delegates it to an authenticated reverse proxy.
 When enabled, Basic auth must be served over HTTPS. Keep raw Flask/FastAPI ports private and
 restrict access to them with firewall/container networking rules.
+
+`TRANSLATE_RT_API_TOKEN` is mandatory: the API exits at startup when it is unset,
+because an empty token used to disable authentication and expose every
+provider-backed route as an open relay. Only `/healthz` stays public;
+`/docs`, `/redoc` and `/openapi.json` require the token. CORS is same-origin by
+default (`CORS_ALLOW_ORIGINS` empty) and credentialed CORS is rejected at startup
+when the resulting origin set or regex matches arbitrary hosts.

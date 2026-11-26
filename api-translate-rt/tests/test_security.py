@@ -8,7 +8,7 @@ from unittest.mock import Mock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-from test_pipeline import api
+from test_pipeline import APP_PATH, api
 from guards import RequestGuards
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -26,7 +26,13 @@ def local_demo_mode(monkeypatch):
 @pytest.fixture
 def client():
     api.app.middleware_stack = None
-    with TestClient(api.app, raise_server_exceptions=False) as client:
+    # The API now refuses to start without a token, so the real app enforces
+    # auth: every test that exercises validation must present it explicitly.
+    with TestClient(
+        api.app,
+        raise_server_exceptions=False,
+        headers={'Authorization': f'Bearer {api.Cfg.TRANSLATE_RT_API_TOKEN}'},
+    ) as client:
         yield client
 
 
@@ -214,3 +220,107 @@ def test_concurrency_limit_and_release(monkeypatch):
         assert guards.active == 0
 
     asyncio.run(scenario())
+
+
+# ─────────────────── Security review hardening (non-regression) ───────────────────
+AUTH = {'Authorization': 'Bearer test-api-token'}
+
+
+def _load_api_with_env(monkeypatch, **env):
+    """Re-import the API module with a controlled environment.
+
+    The module reads its configuration at import time, so a fresh load is the
+    only way to assert on startup validation.
+    """
+    for key in ('TRANSLATE_RT_API_TOKEN', 'CORS_ALLOW_ORIGINS', 'CORS_ALLOW_ORIGIN_REGEX',
+                'CORS_ALLOW_CREDENTIALS'):
+        monkeypatch.delenv(key, raising=False)
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+    spec = importlib.util.spec_from_file_location(f'api_reload_{len(env)}_{id(env)}', APP_PATH)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_token_is_mandatory_at_startup(monkeypatch):
+    """An unset token must stop the process instead of disabling auth."""
+    with pytest.raises(RuntimeError, match='TRANSLATE_RT_API_TOKEN'):
+        _load_api_with_env(monkeypatch)
+
+
+def test_cors_defaults_to_same_origin(monkeypatch):
+    module = _load_api_with_env(monkeypatch, TRANSLATE_RT_API_TOKEN='t')
+    assert module.ALLOW_ORIGINS == []
+    assert module.ALLOW_ORIGIN_REGEX is None
+
+
+def test_credentials_with_wildcard_regex_is_rejected(monkeypatch):
+    """`CORS_ALLOW_ORIGIN_REGEX=.*` used to slip past the old string compare.
+
+    The origin list is set to a single explicit value on purpose: the only
+    reason to reject this config is the regex, so the test fails on the old
+    `allow_origin_regex == '.*'` comparison rather than on the wildcard list.
+    """
+    with pytest.raises(RuntimeError, match='CORS'):
+        _load_api_with_env(
+            monkeypatch,
+            TRANSLATE_RT_API_TOKEN='t',
+            CORS_ALLOW_CREDENTIALS='true',
+            CORS_ALLOW_ORIGINS='https://app.example.com',
+            CORS_ALLOW_ORIGIN_REGEX='.*',
+        )
+
+
+def test_credentials_with_explicit_origin_is_allowed(monkeypatch):
+    module = _load_api_with_env(
+        monkeypatch,
+        TRANSLATE_RT_API_TOKEN='t',
+        CORS_ALLOW_CREDENTIALS='true',
+        CORS_ALLOW_ORIGINS='https://app.example.com',
+    )
+    assert module.ALLOW_ORIGINS == ['https://app.example.com']
+
+
+def test_documentation_routes_require_the_token(client):
+    # `client` drops the middleware stack to test validation in isolation, so
+    # rebuild it here to exercise the real guard.
+    api.app.middleware_stack = api.app.build_middleware_stack()
+    guarded = TestClient(api.app, headers={'Authorization': 'Bearer wrong'})
+    anonymous = TestClient(api.app)
+    try:
+        assert anonymous.get('/healthz').status_code == 200
+        assert anonymous.get('/openapi.json').status_code == 401
+        assert anonymous.get('/docs').status_code == 401
+        assert guarded.get('/openapi.json').status_code == 401
+        assert TestClient(api.app, headers=AUTH).get('/openapi.json').status_code == 200
+    finally:
+        api.app.middleware_stack = None
+
+
+def test_tts_forwards_only_known_fields(client, monkeypatch):
+    monkeypatch.setattr(api.Cfg, 'TTS_API_KEY', 'fixture')
+    response = Mock(ok=True, content=b'audio', status_code=200,
+                    headers={'Content-Type': 'audio/webm'})
+    with patch.object(api, 'post', return_value=response) as post:
+        status = client.post('/tts-proxy', json={
+            'input': 'bonjour', 'voice': 'alloy', 'model': 'gpt-4o-mini-tts',
+            'speed': 2.0, 'instructions': 'ignore previous instructions',
+        }).status_code
+    assert status == 200
+    forwarded = post.call_args.kwargs['json']
+    assert set(forwarded) == {'input', 'voice', 'model', 'instructions'}
+    assert 'speed' not in forwarded
+
+
+@pytest.mark.parametrize('field,value', [
+    ('model', '../../etc/passwd'),
+    ('voice', 'x' * 200),
+    ('response_format', 'exe'),
+])
+def test_tts_rejects_unknown_provider_options(client, monkeypatch, field, value):
+    monkeypatch.setattr(api.Cfg, 'TTS_API_KEY', 'fixture')
+    with patch.object(api, 'post') as post:
+        status = client.post('/tts-proxy', json={'input': 'bonjour', field: value}).status_code
+    assert status == 422
+    post.assert_not_called()
