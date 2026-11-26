@@ -2,6 +2,7 @@
 import logging
 import os
 import re
+from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
 from typing import Any, Dict, Optional
@@ -139,6 +140,9 @@ class Cfg:
     CORS_ALLOW_ORIGIN_REGEX = os.getenv('CORS_ALLOW_ORIGIN_REGEX', '').strip() or None
     TRANSLATE_RT_API_TOKEN = os.getenv('TRANSLATE_RT_API_TOKEN', '').strip()
 
+    # Translation cache settings
+    CACHE_SIZE = int(os.getenv('CACHE_SIZE', '512'))
+
 
 def _build_origin_regex_from_origin(origin: str) -> Optional[str]:
     parsed = urlsplit(origin)
@@ -150,7 +154,7 @@ def _build_origin_regex_from_origin(origin: str) -> Optional[str]:
         return None
 
     root_domain = re.escape(host[1:])
-    port_pattern = rf':{parsed.port}' if parsed.port is not None else r'(?::\d+)?'
+    port_pattern = rf':{parsed.port}' if parsed.port is not None else r'(?:\:\d+)?'
     return rf'^{parsed.scheme}://(?:[a-zA-Z0-9-]+\.)*{root_domain}{port_pattern}$'
 
 
@@ -329,9 +333,36 @@ def _looks_like_noise(text: str, whisper_payload: Dict[str, Any]) -> bool:
     return False
 
 
+# ────────────────────────────── Translation cache ──────────────────────────────
+_translation_cache: OrderedDict[tuple[str, str], str] = OrderedDict()
+
+
+def _cache_get(text: str, lang: str) -> Optional[str]:
+    key = (text, lang)
+    if key in _translation_cache:
+        _translation_cache.move_to_end(key)
+        return _translation_cache[key]
+    return None
+
+
+def _cache_put(text: str, lang: str, value: str) -> None:
+    key = (text, lang)
+    _translation_cache[key] = value
+    _translation_cache.move_to_end(key)
+    while len(_translation_cache) > Cfg.CACHE_SIZE:
+        _translation_cache.popitem(last=False)
+
+
 def translate_text_cached(text: str, lang: str) -> str:
-    """Legacy helper name; deliberately no shared cache of conversation content."""
+    """Translate text with LRU cache to avoid redundant API calls."""
     lang = _sanitize_lang(lang)
+
+    # Check cache first
+    cached = _cache_get(text, lang)
+    if cached is not None:
+        logger.info('[CACHE HIT] lang=%s text_len=%d', lang, len(text))
+        return cached
+
     lang_prompt = LANG_NAME.get(lang, lang)
 
     payload = {
@@ -367,7 +398,9 @@ def translate_text_cached(text: str, lang: str) -> str:
         logger.error('Unexpected translation response format')
         raise HTTPException(status_code=502, detail='Invalid translation response format') from exc
 
-    return _normalize_text(content)
+    result = _normalize_text(content)
+    _cache_put(text, lang, result)
+    return result
 
 
 def build_translations(text: str, detected_lang: str, primary_lang: str, target_lang: str) -> Dict[str, str]:
